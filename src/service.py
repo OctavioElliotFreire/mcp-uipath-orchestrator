@@ -4,13 +4,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Orchestrator configuration
+# Orchestrator configuration - loaded from .env file
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL")
 TENANT_NAME = os.getenv("TENANT_NAME")
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 ACCOUNT_LOGICAL_NAME = os.getenv("ACCOUNT_LOGICAL_NAME")
-
 
 
 class OrchestratorClient:
@@ -23,7 +22,7 @@ class OrchestratorClient:
     
     async def authenticate(self):
         """Authenticate with UiPath Orchestrator using OAuth2"""
-        auth_url = f"{self.base_url}/identity_/connect/token"
+        auth_url = f"{self.base_url}identity_/connect/token"
         
         data = {
             "grant_type": "client_credentials",
@@ -39,22 +38,29 @@ class OrchestratorClient:
         self.access_token = token_data["access_token"]
         return self.access_token
     
-    def get_headers(self):
+    def get_headers(self, folder_id: int = None):
         """Get headers for API requests"""
-        return {
+        headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
             "X-UIPATH-TenantName": self.tenant,
-            "X-UIPATH-OrganizationUnitId": self.account
         }
+        
+        # Add folder context if provided
+        if folder_id:
+            headers["X-UIPATH-OrganizationUnitId"] = str(folder_id)
+        else:
+            headers["X-UIPATH-OrganizationUnitId"] = self.account
+            
+        return headers
     
-    async def get(self, endpoint: str):
+    async def get(self, endpoint: str, folder_id: int = None):
         """Make GET request to Orchestrator"""
         if not self.access_token:
             await self.authenticate()
         
-        url = f"{self.base_url}/{self.account}/{self.tenant}/{endpoint}"
-        response = await self.client.get(url, headers=self.get_headers())
+        url = f"{self.base_url}{self.account}/{self.tenant}/{endpoint}"
+        response = await self.client.get(url, headers=self.get_headers(folder_id=folder_id))
         response.raise_for_status()
         return response.json()
     
@@ -63,28 +69,21 @@ class OrchestratorClient:
         if not self.access_token:
             await self.authenticate()
         
-        url = f"{self.base_url}/{self.account}/{self.tenant}/{endpoint}"
+        url = f"{self.base_url}{self.account}/{self.tenant}/{endpoint}"
         response = await self.client.post(url, headers=self.get_headers(), json=data)
         response.raise_for_status()
         return response.json()
     
-    
-        
-        return await self.post("odata/Jobs/UiPath.Server.Configuration.OData.StartJobs", job_data)
-    
-
-
-
-    async def get_folders(self, filter_query: str = None):
+    async def get_folders(self):
         """Get all folders from Orchestrator"""
         endpoint = "odata/folders"
-        
-        if filter_query:
-            separator = "&"
-            endpoint += f"{separator}$filter={filter_query}"
-        
         return await self.get(endpoint)
-
+        
+    async def get_assets(self, folder_id: int):
+        """Get assets from Orchestrator for a specific folder"""
+        endpoint = "odata/Assets"
+        return await self.get(endpoint, folder_id=folder_id)
+    
     async def close(self):
         """Close HTTP client"""
         await self.client.aclose()
