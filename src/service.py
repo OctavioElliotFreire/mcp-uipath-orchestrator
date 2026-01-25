@@ -24,6 +24,7 @@ class OrchestratorClient:
         """Authenticate with UiPath Orchestrator using OAuth2"""
         auth_url = f"{self.base_url}identity_/connect/token"
         
+        
         data = {
             "grant_type": "client_credentials",
             "client_id": CLIENT_ID,
@@ -32,6 +33,12 @@ class OrchestratorClient:
         }
         
         response = await self.client.post(auth_url, data=data)
+        
+        # Debug: Print response if it fails
+        if response.status_code != 200:
+            print(f"DEBUG - Response Status: {response.status_code}")
+            print(f"DEBUG - Response Body: {response.text}")
+        
         response.raise_for_status()
         
         token_data = response.json()
@@ -60,7 +67,13 @@ class OrchestratorClient:
             await self.authenticate()
         
         url = f"{self.base_url}{self.account}/{self.tenant}/{endpoint}"
-        response = await self.client.get(url, headers=self.get_headers(folder_id=folder_id))
+        headers = self.get_headers(folder_id=folder_id)
+        
+        # Debug: Print headers to verify folder_id is being used
+        print(f"DEBUG - URL: {url}")
+        print(f"DEBUG - X-UIPATH-OrganizationUnitId: {headers.get('X-UIPATH-OrganizationUnitId')}")
+        
+        response = await self.client.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
     
@@ -83,6 +96,17 @@ class OrchestratorClient:
         """Get assets from Orchestrator for a specific folder"""
         endpoint = "odata/Assets"
         return await self.get(endpoint, folder_id=folder_id)
+    
+    async def get_queues(self, folder_id: int):
+        """Get queues from Orchestrator for a specific folder"""
+        endpoint = "odata/QueueDefinitions"
+        return await self.get(endpoint, folder_id=folder_id)
+    
+    async def get_storage_buckets(self, folder_id: int):
+        """Get storage buckets from Orchestrator for a specific folder"""
+        endpoint = "odata/Buckets"
+        return await self.get(endpoint, folder_id=folder_id)
+    
     
     async def close(self):
         """Close HTTP client"""
