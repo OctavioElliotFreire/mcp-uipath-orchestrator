@@ -112,6 +112,16 @@ class OrchestratorClient:
         endpoint = "odata/ProcessSchedules"
         return await self.get(endpoint, folder_id=folder_id)
     
+    async def get_processes(self, folder_id: int):
+        """Get processes from Orchestrator for a specific folder"""
+        endpoint = "odata/Releases"
+        return await self.get(endpoint, folder_id=folder_id)
+        
+    async def get_business_rule_files(self, folder_id: int):
+        """Get business rule files from Orchestrator for a specific folder"""
+        endpoint = "odata/BusinessRuleFiles"
+        return await self.get(endpoint, folder_id=folder_id)
+
     async def close(self):
         """Close HTTP client"""
         await self.client.aclose()

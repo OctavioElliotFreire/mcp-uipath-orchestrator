@@ -430,6 +430,179 @@ async def test_get_triggers():
     finally:
         await client.close()
 
+async def test_get_processes():
+    """Test 7: Get Processes"""
+    print("\n" + "=" * 60)
+    print("TEST 7: Get Processes")
+    print("=" * 60)
+    
+    client = OrchestratorClient()
+    
+    try:
+        print("\n▶ Authenticating...")
+        await client.authenticate()
+        print("✓ Authenticated")
+        
+        print("\n▶ Fetching folders...")
+        folders = await client.get_folders()
+        print(f"✓ Found {len(folders['value'])} folders")
+        
+        print(f"\n▶ Testing process access across folders...")
+        
+        tested = 0
+        accessible = 0
+        with_processes = 0
+        
+        for folder in folders['value'][:10]:  # Test first 10
+            folder_id = folder['Id']
+            folder_name = folder['DisplayName']
+            tested += 1
+            
+            try:
+                processes = await client.get_processes(folder_id=folder_id)
+                accessible += 1
+                
+                process_count = len(processes.get('value', []))
+                
+                if process_count > 0:
+                    with_processes += 1
+                    print(f"  ✓ {folder_name}: {process_count} process(es)")
+                    
+                    # Show details for first folder with processes
+                    if with_processes == 1:
+                        print(f"\n  Sample processes from '{folder_name}':")
+                        for i, process in enumerate(processes['value'][:3], 1):
+                            name = process.get('Name', 'N/A')
+                            process_key = process.get('ProcessKey', 'N/A')
+                            version = process.get('ProcessVersion', 'N/A')
+                            description = process.get('Description', 'N/A')
+                            print(f"    {i}. {name} (v{version})")
+                            print(f"       Key: {process_key}")
+                            if description and description != 'N/A':
+                                print(f"       Description: {description[:50]}...")
+                else:
+                    print(f"  - {folder_name}: (no processes)")
+                    
+            except Exception as e:
+                error_msg = str(e)
+                if "403" in error_msg:
+                    print(f"  ⚠ {folder_name}: Permission denied")
+                elif "404" in error_msg:
+                    print(f"  ⚠ {folder_name}: Not found")
+                else:
+                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
+        
+        # Summary
+        print(f"\n▶ Summary:")
+        print(f"  Folders tested: {tested}")
+        print(f"  Accessible: {accessible}")
+        print(f"  With processes: {with_processes}")
+        
+        if accessible == 0:
+            print("\n✗ FAIL: No folders accessible (permission issue)")
+            return False
+        elif with_processes == 0:
+            print("\n⚠ WARNING: Process retrieval works, but no processes found")
+            return True
+        else:
+            print(f"\n✓ PASS: Successfully retrieved processes")
+            return True
+            
+    except Exception as e:
+        print(f"✗ FAIL: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
+        await client.close()
+    
+async def test_get_business_rule_files():
+    """Test 8: Get Business Rule Files"""
+    print("\n" + "=" * 60)
+    print("TEST 8: Get Business Rule Files")
+    print("=" * 60)
+    
+    client = OrchestratorClient()
+    
+    try:
+        print("\n▶ Authenticating...")
+        await client.authenticate()
+        print("✓ Authenticated")
+        
+        print("\n▶ Fetching folders...")
+        folders = await client.get_folders()
+        print(f"✓ Found {len(folders['value'])} folders")
+        
+        print(f"\n▶ Testing business rule file access across folders...")
+        
+        tested = 0
+        accessible = 0
+        with_business_rules = 0
+        
+        for folder in folders['value'][:10]:  # Test first 10
+            folder_id = folder['Id']
+            folder_name = folder['DisplayName']
+            tested += 1
+            
+            try:
+                business_rules = await client.get_business_rule_files(folder_id=folder_id)
+                accessible += 1
+                
+                business_rule_count = len(business_rules.get('value', []))
+                
+                if business_rule_count > 0:
+                    with_business_rules += 1
+                    print(f"  ✓ {folder_name}: {business_rule_count} business rule file(s)")
+                    
+                    # Show details for first folder with business rules
+                    if with_business_rules == 1:
+                        print(f"\n  Sample business rule files from '{folder_name}':")
+                        for i, rule in enumerate(business_rules['value'][:3], 1):
+                            name = rule.get('Name', 'N/A')
+                            rule_id = rule.get('Id', 'N/A')
+                            description = rule.get('Description', 'N/A')
+                            version = rule.get('Version', 'N/A')
+                            print(f"    {i}. {name} (v{version})")
+                            print(f"       ID: {rule_id}")
+                            if description and description != 'N/A':
+                                print(f"       Description: {description[:50]}...")
+                else:
+                    print(f"  - {folder_name}: (no business rule files)")
+                    
+            except Exception as e:
+                error_msg = str(e)
+                if "403" in error_msg:
+                    print(f"  ⚠ {folder_name}: Permission denied")
+                elif "404" in error_msg:
+                    print(f"  ⚠ {folder_name}: Not found")
+                else:
+                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
+        
+        # Summary
+        print(f"\n▶ Summary:")
+        print(f"  Folders tested: {tested}")
+        print(f"  Accessible: {accessible}")
+        print(f"  With business rule files: {with_business_rules}")
+        
+        if accessible == 0:
+            print("\n✗ FAIL: No folders accessible (permission issue)")
+            return False
+        elif with_business_rules == 0:
+            print("\n⚠ WARNING: Business rule file retrieval works, but no files found")
+            return True
+        else:
+            print(f"\n✓ PASS: Successfully retrieved business rule files")
+            return True
+            
+    except Exception as e:
+        print(f"✗ FAIL: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
+        await client.close()
 
 # ============================================================================
 # Main - Uncomment the test you want to run
@@ -443,7 +616,11 @@ if __name__ == "__main__":
     #result = asyncio.run(test_get_queues())
     #result = asyncio.run(test_get_assets())
     #result = asyncio.run(test_get_storage_buckets())
-    result = asyncio.run(test_get_triggers())
+    #result = asyncio.run(test_get_triggers())
+    #result = asyncio.run(test_get_processes())
+    result = asyncio.run(test_get_business_rule_files())
+    
+    
     
     print("\n" + "=" * 60)
     if result:
