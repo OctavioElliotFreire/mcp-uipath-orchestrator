@@ -107,6 +107,10 @@ class OrchestratorClient:
         endpoint = "odata/Buckets"
         return await self.get(endpoint, folder_id=folder_id)
     
+    async def get_triggers(self, folder_id: int):
+        """Get all triggers (time and queue) from Orchestrator for a specific folder"""
+        endpoint = "odata/ProcessSchedules"
+        return await self.get(endpoint, folder_id=folder_id)
     
     async def close(self):
         """Close HTTP client"""
