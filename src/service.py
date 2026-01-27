@@ -1,11 +1,12 @@
 import os
+import json
 import httpx
 from dotenv import load_dotenv
-from urllib.parse import urljoin
+
 load_dotenv()
 
 # -----------------------------------------------------------------------------
-# Global configuration (shared across tenants)
+# Global configuration
 # -----------------------------------------------------------------------------
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL")
@@ -14,21 +15,15 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 ACCOUNT_LOGICAL_NAME = os.getenv("ACCOUNT_LOGICAL_NAME")
 
 TENANTS = [
-    t.strip()
+    t.strip().upper()
     for t in os.getenv("TENANTS", "").split(",")
     if t.strip()
 ]
 
 
 def _require(value: str | None, name: str) -> str:
-    """
-    Fail fast with a clear error if a required value is missing.
-    """
     if not value:
-        raise RuntimeError(
-            f"Required configuration '{name}' is not set. "
-            "This may be expected in compliance/redacted environments."
-        )
+        raise RuntimeError(f"Required configuration '{name}' is not set")
     return value
 
 
@@ -38,11 +33,11 @@ def _require(value: str | None, name: str) -> str:
 
 class OrchestratorClient:
     """
-    UiPath Orchestrator client (multi-tenant, programmatic).
+    UiPath Orchestrator client (multi-tenant).
 
-    - Tenants are passed directly (must be real UiPath tenant names)
-    - OAuth token is shared across all tenants
-    - Tenant switching is done via X-UIPATH-TenantName header
+    - TENANTS is an allow-list
+    - LIBRARIES_FEED_ID_MAP provides tenant → feed mapping
+    - OAuth (Secure Deployment) only
     """
 
     _access_token: str | None = None
@@ -52,32 +47,31 @@ class OrchestratorClient:
         self.account = _require(ACCOUNT_LOGICAL_NAME, "ACCOUNT_LOGICAL_NAME")
 
         if not TENANTS:
+            raise RuntimeError("TENANTS is empty")
+
+        tenant = tenant.upper() if tenant else TENANTS[0]
+
+        if tenant not in TENANTS:
             raise RuntimeError(
-                "No tenants configured. Set TENANTS in the environment."
+                f"Tenant '{tenant}' is not allowed. Allowed tenants: {TENANTS}"
             )
 
-        if tenant:
-            if tenant not in TENANTS:
-                raise RuntimeError(
-                    f"Unknown tenant '{tenant}'. "
-                    f"Allowed tenants: {TENANTS}"
-                )
-            self.tenant = tenant
-        else:
-            # Default to the first configured tenant
-            self.tenant = TENANTS[0]
+        self.tenant = tenant
 
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # NOTE:
+        # Do NOT validate NuGet here.
+        # NuGet is only required for list_library_versions.
+
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=False,
+        )
 
     # -------------------------------------------------------------------------
     # Authentication
     # -------------------------------------------------------------------------
 
     async def authenticate(self) -> str:
-        """
-        Authenticate once using client credentials.
-        Token is reused across all tenants.
-        """
         if OrchestratorClient._access_token:
             return OrchestratorClient._access_token
 
@@ -89,32 +83,19 @@ class OrchestratorClient:
             "client_secret": _require(CLIENT_SECRET, "CLIENT_SECRET"),
         }
 
-        response = await self.client.post(auth_url, data=data)
-        response.raise_for_status()
+        r = await self.client.post(auth_url, data=data)
+        r.raise_for_status()
 
-        token_data = response.json()
-        OrchestratorClient._access_token = token_data["access_token"]
+        OrchestratorClient._access_token = r.json()["access_token"]
         return OrchestratorClient._access_token
 
-
     # -------------------------------------------------------------------------
-    # Request helpers
+    # Headers
     # -------------------------------------------------------------------------
 
-   
-    def get_headers(
-        self,
-        folder_id: int | None = None,
-        account_level: bool = False
-    ) -> dict:
-        """
-        Build request headers.
-
-        account_level=True:
-        - NO OrganizationUnitId header
-        """
+    def _orchestrator_headers(self, folder_id: int | None = None) -> dict:
         if not OrchestratorClient._access_token:
-            raise RuntimeError("Client is not authenticated")
+            raise RuntimeError("Client not authenticated")
 
         headers = {
             "Authorization": f"Bearer {OrchestratorClient._access_token}",
@@ -122,13 +103,16 @@ class OrchestratorClient:
             "X-UIPATH-TenantName": self.tenant,
         }
 
-        if not account_level:
-            headers["X-UIPATH-OrganizationUnitId"] = (
-                str(folder_id) if folder_id else self.account
-            )
+        if folder_id is not None:
+            headers["X-UIPATH-OrganizationUnitId"] = str(folder_id)
+        else:
+            headers["X-UIPATH-OrganizationUnitId"] = self.account
 
         return headers
 
+    # -------------------------------------------------------------------------
+    # REST helpers
+    # -------------------------------------------------------------------------
 
     async def get(self, endpoint: str, folder_id: int | None = None):
         if not OrchestratorClient._access_token:
@@ -139,67 +123,15 @@ class OrchestratorClient:
             f"{self.tenant}/{endpoint}"
         )
 
-        response = await self.client.get(
+        r = await self.client.get(
             url,
-            headers=self.get_headers(folder_id=folder_id)
+            headers=self._orchestrator_headers(folder_id),
         )
-        response.raise_for_status()
-        return response.json()
-
-
-    async def post(self, endpoint: str, data: dict):
-        """
-        Make a POST request to Orchestrator.
-        """
-        if not OrchestratorClient._access_token:
-            await self.authenticate()
-
-        url = f"{self.base_url}{self.account}/{self.tenant}/{endpoint}"
-        response = await self.client.post(
-            url, headers=self.get_headers(), json=data
-        )
-        response.raise_for_status()
-        return response.json()
-
-    async def _get_nuget_service(self, service_type: str) -> str:
-        """
-        Resolve a NuGet v3 service URL dynamically from the org NuGet index.
-        """
-        feed_url = os.getenv("NUGET_FEED_URL")
-        if not feed_url:
-            raise RuntimeError("NUGET_FEED_URL is not configured")
-
-        if not OrchestratorClient._access_token:
-            await self.authenticate()
-
-        response = await self.client.get(
-            feed_url,
-            headers={
-                "Authorization": f"Bearer {OrchestratorClient._access_token}",
-                "X-UIPATH-TenantName": self.tenant,
-                "Accept": "application/json",
-            }
-        )
-        response.raise_for_status()
-
-        data = response.json()
-
-        for resource in data.get("resources", []):
-            types = resource.get("@type")
-            if isinstance(types, list):
-                if service_type in types:
-                    return resource["@id"]
-            elif types == service_type:
-                return resource["@id"]
-
-        raise RuntimeError(
-            f"NuGet service '{service_type}' not found in index"
-        )
-
-
+        r.raise_for_status()
+        return r.json()
 
     # -------------------------------------------------------------------------
-    # Domain methods
+    # Domain methods (Orchestrator)
     # -------------------------------------------------------------------------
 
     async def get_folders(self):
@@ -211,80 +143,97 @@ class OrchestratorClient:
     async def get_queues(self, folder_id: int):
         return await self.get("odata/QueueDefinitions", folder_id)
 
-    async def get_storage_buckets(self, folder_id: int):
-        return await self.get("odata/Buckets", folder_id)
-
     async def get_triggers(self, folder_id: int):
         return await self.get("odata/ProcessSchedules", folder_id)
 
     async def get_processes(self, folder_id: int):
         return await self.get("odata/Releases", folder_id)
-    
-    async def list_libraries(self, search: str | None = None) -> list[str]:
-        """
-        List available UiPath library package names.
 
-        Args:
-            search: Optional substring to filter package names
-        """
+    async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
-
-        names = {
-            lib.get("Id")
+        return sorted(
+            lib["Id"]
             for lib in data.get("value", [])
             if lib.get("Id")
-        }
+        )
 
-        if search:
-            search_lower = search.lower()
-            names = {
-                name for name in names
-                if search_lower in name.lower()
-            }
+    # -------------------------------------------------------------------------
+    # NuGet helpers
+    # -------------------------------------------------------------------------
 
-        return sorted(names)
+    def _get_libraries_feed_id(self) -> str:
+        raw = os.getenv("LIBRARIES_FEED_ID_MAP")
 
-    async def list_library_versions2(self, package_id: str) -> list[str]:
-        """
-        List available versions for a specific UiPath library package.
-        """
-        data = await self.get("odata/Libraries")
+        if not raw:
+            raise RuntimeError("LIBRARIES_FEED_ID_MAP is not set")
 
-        versions = {
-            lib.get("Version")
-            for lib in data.get("value", [])
-            if lib.get("Id") == package_id and lib.get("Version")
-        }
-
-        if not versions:
+        try:
+            mapping = json.loads(raw)
+        except json.JSONDecodeError as e:
             raise RuntimeError(
-                f"No versions found for library '{package_id}'"
+                f"LIBRARIES_FEED_ID_MAP contains invalid JSON: {e}"
             )
+
+        print("DEBUG: parsed feed map =", mapping)
+
+        feed_id = mapping.get(self.tenant)
+        if not feed_id:
+            raise RuntimeError(
+                f"No Libraries feed ID configured for tenant '{self.tenant}'"
+            )
+
+       
+
+        return feed_id
+
+
+    async def list_library_versions(self, package_id: str) -> list[str]:
+        if not OrchestratorClient._access_token:
+            await self.authenticate()
+
+        feed_id = self._get_libraries_feed_id()
+
+        index_url = (
+            f"{self.base_url}{self.account}/{self.tenant}"
+            f"/orchestrator_/nuget/v3/{feed_id}/index.json"
+        )
+
+        headers = {
+            "Authorization": f"Bearer {OrchestratorClient._access_token}",
+            "Accept": "application/json",
+        }
+
+        # 1) NuGet service index
+        r = await self.client.get(index_url, headers=headers)
+        r.raise_for_status()
+        index = r.json()
+
+        # 2) Find PackageBaseAddress
+        base_addr = None
+        for res in index.get("resources", []):
+            t = res.get("@type")
+            if t == "PackageBaseAddress/3.0.0" or (
+                isinstance(t, list) and "PackageBaseAddress/3.0.0" in t
+            ):
+                base_addr = res["@id"]
+                break
+
+        if not base_addr:
+            raise RuntimeError("PackageBaseAddress/3.0.0 not found")
+
+        # 3) Fetch versions
+        pkg = package_id.lower()
+        versions_url = f"{base_addr.rstrip('/')}/{pkg}/index.json"
+
+        vr = await self.client.get(versions_url, headers=headers)
+        vr.raise_for_status()
+
+        versions = vr.json().get("versions", [])
+        if not versions:
+            raise RuntimeError(f"No versions found for '{package_id}'")
 
         return sorted(versions)
 
-    async def list_library_versions(self, package_id: str) -> list[str]:
-        """
-        List ALL versions of a UiPath library using the NuGet feed.
-        """
-        # NuGet flat container
-        base_url = await self._get_nuget_service("PackageBaseAddress/3.0.0")
-
-        pkg = package_id.lower()
-        index_url = urljoin(base_url, f"{pkg}/index.json")
-
-        response = await self.client.get(index_url)
-        response.raise_for_status()
-
-        data = response.json()
-        versions = data.get("versions", [])
-
-        if not versions:
-            raise RuntimeError(
-                f"No versions found for library '{package_id}' in NuGet feed"
-            )
-
-        return versions
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------

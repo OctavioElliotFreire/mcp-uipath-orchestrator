@@ -240,70 +240,75 @@ async def test_get_processes_multi_tenant():
 
 async def test_list_library_versions_flow():
     """
-    Test:
+    Test (for ALL tenants):
     1. List libraries
     2. Pick the first library
     3. List all versions for that library
     """
     print("\n" + "=" * 60)
-    print("TEST: List Libraries → List Library Versions")
+    print("TEST: List Libraries → List Library Versions (All Tenants)")
     print("=" * 60)
 
-    tenant = TENANTS[0]
-    print(f"\n▶ Using tenant: {tenant}")
+    results = {}
 
-    client = OrchestratorClient(tenant=tenant)
+    for tenant in TENANTS:
+        print("\n" + "-" * 60)
+        print(f"▶ Tenant: {tenant}")
+        print("-" * 60)
 
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
+        client = OrchestratorClient(tenant=tenant)
 
-        # Step 1: List libraries
-        print("\n▶ Fetching libraries...")
-        libraries = await client.list_libraries()
+        try:
+            print("▶ Authenticating...")
+            await client.authenticate()
+            print("✓ Authenticated")
 
-        if not libraries:
-            print("✗ FAIL: No libraries found")
-            return False
+            # Step 1: List libraries
+            print("▶ Fetching libraries...")
+            libraries = await client.list_libraries()
 
-        print(f"✓ Found {len(libraries)} libraries")
+            if not libraries:
+                print(f"✗ FAIL: No libraries found in tenant {tenant}")
+                results[tenant] = False
+                continue
 
-        # Show first 5
-        print("\n  Sample libraries:")
-        for i, lib in enumerate(libraries[:5], 1):
-            print(f"    {i}. {lib}")
+            print(f"✓ Found {len(libraries)} libraries")
 
-        # Step 2: Pick the first library
-        package_id = libraries[1]
-        print(f"\n▶ Testing versions for library: {package_id}")
+            # Show first 5 libraries
+            print("  Sample libraries:")
+            for i, lib in enumerate(libraries[:5], 1):
+                print(f"    {i}. {lib}")
 
-        # Step 3: List versions
-        versions = await client.list_library_versions(package_id)
+            # Step 2: Pick the first library
+            package_id = libraries[0]
+            print(f"▶ Testing versions for library: {package_id}")
 
-        if not versions:
-            print(f"✗ FAIL: No versions returned for {package_id}")
-            return False
+            # Step 3: List versions
+            versions = await client.list_library_versions(package_id)
 
-        print(f"✓ Found {len(versions)} versions for {package_id}")
+            if not versions:
+                print(f"✗ FAIL: No versions returned for {package_id}")
+                results[tenant] = False
+                continue
 
-        # Show versions
-        print("\n  Versions:")
-        for v in versions:
-            print(f"    - {v}")
+            print(f"✓ Found {len(versions)} versions for {package_id}")
 
-        print("\n✓ PASS: Library version enumeration works")
-        return True
+            # Show versions
+            print("  Versions:")
+            for v in versions:
+                print(f"    - {v}")
 
-    except Exception as e:
-        print(f"\n✗ FAIL: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+            print(f"✓ PASS: Library version enumeration works for {tenant}")
+            results[tenant] = True
 
-    finally:
-        await client.close()
+        except Exception as e:
+            print(f"✗ FAIL for tenant {tenant}: {e}")
+            import traceback
+            traceback.print_exc()
+            results[tenant] = False
 
+        finally:
+            await client.close()
 # -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
@@ -318,6 +323,7 @@ if __name__ == "__main__":
     #result = asyncio.run(test_get_triggers_multi_tenant())
     #result = asyncio.run(test_get_processes_multi_tenant())
     result = asyncio.run(test_list_library_versions_flow())
+
     print("\n" + "=" * 60)
     print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
     print("=" * 60)
