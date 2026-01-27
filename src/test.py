@@ -1,83 +1,253 @@
+"""
+Individual tests for UiPath Orchestrator Client (Multi-Tenant)
+Uncomment the test you want to run at the bottom
+"""
+
 import asyncio
+import os
 from service import OrchestratorClient
 
+TENANTS = [
+    t.strip()
+    for t in os.getenv("TENANTS", "").split(",")
+    if t.strip()
+]
+
+
+# -----------------------------------------------------------------------------
+# TEST 1: Authentication (shared token)
+# -----------------------------------------------------------------------------
+
 async def test_connection():
-    """Test connection and get folders from UiPath Orchestrator"""
-    
-    print("Testing UiPath Orchestrator Connection...")
-    print("=" * 50)
-    
+    """Test 1: Connection and Authentication (Shared Token)"""
+    print("\n" + "=" * 60)
+    print("TEST 1: Connection and Authentication (Shared Token)")
+    print("=" * 60)
+
     client = OrchestratorClient()
-    
+
     try:
-        # Test authentication
-        print("\n1. Attempting authentication...")
-        token = await client.authenticate()
-        
-        if token:
-            print(f"✓ Authentication successful!")
-            print(f"   Token: {token[:30]}...")
-            
-            # Test get folders
-            print("\n2. Fetching folders...")
-            folders = await client.get_folders()
-            
-            if folders.get("value"):
-                print(f"✓ Found {folders['@odata.count']} folder(s):\n")
-                
-                # Group folders by hierarchy
-                root_folders = []
-               
-                
-                for folder in folders['value']:
-                    full_path = folder.get('FullyQualifiedName', '')
-                    display_name = folder.get('DisplayName', 'N/A')
-                    folder_id = folder.get('Id', 'N/A')
-                    parent_id = folder.get('ParentId')
-                    
-                    if parent_id is None:
-                        # Root folder
-                        root_folders.append({
-                            'name': display_name,
-                            'id': folder_id,
-                            'path': full_path
-                        })
-                    else:
-                        # Child folder - show with indentation based on path depth
-                        depth = full_path.count('/')
-                        indent = "  " * depth
-                        print(f"{indent}📁 {display_name} (ID: {folder_id})")
-                
-                # Show root folders
-                print("\nRoot Folders:")
-                for folder in root_folders:
-                    print(f"📂 {folder['name']} (ID: {folder['id']})")
-                
-            else:
-                print("   No folders found or empty response")
-            
+        print("\n▶ Authenticating first time...")
+        token1 = await client.authenticate()
+
+        print("▶ Authenticating second time...")
+        token2 = await client.authenticate()
+
+        if token1 == token2:
+            print("✓ PASS: Token reused successfully")
+            print(f"  Token preview: {token1[:30]}...")
             return True
         else:
-            print("✗ Authentication failed - no token received")
+            print("✗ FAIL: Token mismatch")
             return False
-            
+
     except Exception as e:
-        print(f"✗ Test failed!")
-        print(f"   Error: {str(e)}")
-        print(f"   Error type: {type(e).__name__}")
+        print(f"✗ FAIL: {e}")
         return False
-        
+
     finally:
         await client.close()
-        print("\n" + "=" * 50)
-        print("Test complete")
 
+
+# -----------------------------------------------------------------------------
+# TEST 2: Get folders (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_folders_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 2: Get Folders (Multi-Tenant)")
+    print("=" * 60)
+
+    results = {}
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            count = len(folders.get("value", []))
+            results[tenant] = count
+
+            print(f"✓ {tenant}: {count} folders")
+
+            if count > 0:
+                sample = folders["value"][0]
+                print(f"  Sample folder: {sample.get('DisplayName')} (ID: {sample.get('Id')})")
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    print("\n▶ Summary:")
+    for tenant, count in results.items():
+        print(f"  {tenant}: {count} folders")
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 3: Get assets (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_assets_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 3: Get Assets (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            if not folders.get("value"):
+                print(f"⚠ {tenant}: No folders found")
+                continue
+
+            folder = folders["value"][0]
+            assets = await client.get_assets(folder["Id"])
+
+            asset_count = len(assets.get("value", []))
+            print(f"✓ {tenant}: {asset_count} assets in '{folder['DisplayName']}'")
+
+            if asset_count > 0:
+                sample = assets["value"][0]
+                print(f"  Sample asset: {sample.get('Name')} ({sample.get('ValueType')})")
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 4: Get queues (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_queues_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 4: Get Queues (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            for folder in folders.get("value", [])[:3]:
+                queues = await client.get_queues(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(queues.get('value', []))} queues"
+                )
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 5: Get triggers (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_triggers_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 5: Get Triggers (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            for folder in folders.get("value", [])[:3]:
+                triggers = await client.get_triggers(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(triggers.get('value', []))} triggers"
+                )
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 6: Get processes (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_processes_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 6: Get Processes (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            for folder in folders.get("value", [])[:3]:
+                processes = await client.get_processes(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(processes.get('value', []))} processes"
+                )
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# MAIN
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Run the test
+    # Uncomment ONE test at a time:
+
     result = asyncio.run(test_connection())
-    
-    if result:
-        print("\n🎉 SUCCESS - Connection is working!")
-    else:
-        print("\n❌ FAILED - Check your credentials and URL")
+    result = asyncio.run(test_get_folders_multi_tenant())
+    result = asyncio.run(test_get_assets_multi_tenant())
+    result = asyncio.run(test_get_queues_multi_tenant())
+    result = asyncio.run(test_get_triggers_multi_tenant())
+    result = asyncio.run(test_get_processes_multi_tenant())
+
+    print("\n" + "=" * 60)
+    print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
+    print("=" * 60)
