@@ -309,6 +309,89 @@ async def test_list_library_versions_flow():
 
         finally:
             await client.close()
+
+# -----------------------------------------------------------------------------
+# TEST 8: Download library (multi-tenant)
+# -----------------------------------------------------------------------------
+
+
+async def test_download_library_version():
+    """
+    Test:
+    1. Authenticate
+    2. List libraries
+    3. Pick first library
+    4. List versions
+    5. Download a specific version
+    6. Verify file exists in DOWNLOAD_DIR
+    """
+    print("\n" + "=" * 60)
+    print("TEST: Download Library Version")
+    print("=" * 60)
+
+    tenant = TENANTS[0]
+    print(f"\n▶ Using tenant: {tenant}")
+
+    client = OrchestratorClient(tenant=tenant)
+
+    try:
+        print("▶ Authenticating...")
+        await client.authenticate()
+        print("✓ Authenticated")
+
+        print("▶ Fetching libraries...")
+        libraries = await client.list_libraries()
+        if not libraries:
+            print("✗ FAIL: No libraries found")
+            return False
+
+        package_id = libraries[0]
+        print(f"▶ Selected library: {package_id}")
+
+        print("▶ Fetching versions...")
+        versions = await client.list_library_versions(package_id)
+        if not versions:
+            print("✗ FAIL: No versions found")
+            return False
+
+        # Pick latest version
+        version = versions[-1]
+        print(f"▶ Downloading version: {version}")
+
+        path = await client.download_library_version(
+            package_id=package_id,
+            version=version
+        )
+
+        print(f"✓ Downloaded to: {path}")
+
+        if not path.exists():
+            print("✗ FAIL: File does not exist on disk")
+            return False
+
+        size = path.stat().st_size
+        print(f"✓ File size: {size} bytes")
+
+        if size == 0:
+            print("✗ FAIL: Downloaded file is empty")
+            return False
+
+        print("\n✓ PASS: Library download works")
+        return True
+
+    except Exception as e:
+        print(f"\n✗ FAIL: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    finally:
+        await client.close()
+
+
+
+
+
 # -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
@@ -323,6 +406,7 @@ if __name__ == "__main__":
     #result = asyncio.run(test_get_triggers_multi_tenant())
     #result = asyncio.run(test_get_processes_multi_tenant())
     result = asyncio.run(test_list_library_versions_flow())
+    result = asyncio.run(test_download_library_version())
 
     print("\n" + "=" * 60)
     print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
