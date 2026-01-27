@@ -233,6 +233,76 @@ async def test_get_processes_multi_tenant():
 
     return True
 
+# -----------------------------------------------------------------------------
+# TEST 7: Get packages (multi-tenant)
+# -----------------------------------------------------------------------------
+
+
+async def test_list_library_versions_flow():
+    """
+    Test:
+    1. List libraries
+    2. Pick the first library
+    3. List all versions for that library
+    """
+    print("\n" + "=" * 60)
+    print("TEST: List Libraries → List Library Versions")
+    print("=" * 60)
+
+    tenant = TENANTS[0]
+    print(f"\n▶ Using tenant: {tenant}")
+
+    client = OrchestratorClient(tenant=tenant)
+
+    try:
+        print("\n▶ Authenticating...")
+        await client.authenticate()
+        print("✓ Authenticated")
+
+        # Step 1: List libraries
+        print("\n▶ Fetching libraries...")
+        libraries = await client.list_libraries()
+
+        if not libraries:
+            print("✗ FAIL: No libraries found")
+            return False
+
+        print(f"✓ Found {len(libraries)} libraries")
+
+        # Show first 5
+        print("\n  Sample libraries:")
+        for i, lib in enumerate(libraries[:5], 1):
+            print(f"    {i}. {lib}")
+
+        # Step 2: Pick the first library
+        package_id = libraries[1]
+        print(f"\n▶ Testing versions for library: {package_id}")
+
+        # Step 3: List versions
+        versions = await client.list_library_versions(package_id)
+
+        if not versions:
+            print(f"✗ FAIL: No versions returned for {package_id}")
+            return False
+
+        print(f"✓ Found {len(versions)} versions for {package_id}")
+
+        # Show versions
+        print("\n  Versions:")
+        for v in versions:
+            print(f"    - {v}")
+
+        print("\n✓ PASS: Library version enumeration works")
+        return True
+
+    except Exception as e:
+        print(f"\n✗ FAIL: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    finally:
+        await client.close()
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -241,13 +311,13 @@ async def test_get_processes_multi_tenant():
 if __name__ == "__main__":
     # Uncomment ONE test at a time:
 
-    result = asyncio.run(test_connection())
-    result = asyncio.run(test_get_folders_multi_tenant())
-    result = asyncio.run(test_get_assets_multi_tenant())
-    result = asyncio.run(test_get_queues_multi_tenant())
-    result = asyncio.run(test_get_triggers_multi_tenant())
-    result = asyncio.run(test_get_processes_multi_tenant())
-
+    #result = asyncio.run(test_connection())
+    #result = asyncio.run(test_get_folders_multi_tenant())
+    #result = asyncio.run(test_get_assets_multi_tenant())
+    #result = asyncio.run(test_get_queues_multi_tenant())
+    #result = asyncio.run(test_get_triggers_multi_tenant())
+    #result = asyncio.run(test_get_processes_multi_tenant())
+    result = asyncio.run(test_list_library_versions_flow())
     print("\n" + "=" * 60)
     print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
     print("=" * 60)

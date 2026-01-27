@@ -1,7 +1,7 @@
 import os
 import httpx
 from dotenv import load_dotenv
-
+from urllib.parse import urljoin
 load_dotenv()
 
 # -----------------------------------------------------------------------------
@@ -96,13 +96,22 @@ class OrchestratorClient:
         OrchestratorClient._access_token = token_data["access_token"]
         return OrchestratorClient._access_token
 
+
     # -------------------------------------------------------------------------
     # Request helpers
     # -------------------------------------------------------------------------
 
-    def get_headers(self, folder_id: int | None = None) -> dict:
+   
+    def get_headers(
+        self,
+        folder_id: int | None = None,
+        account_level: bool = False
+    ) -> dict:
         """
-        Build request headers with tenant context.
+        Build request headers.
+
+        account_level=True:
+        - NO OrganizationUnitId header
         """
         if not OrchestratorClient._access_token:
             raise RuntimeError("Client is not authenticated")
@@ -113,25 +122,30 @@ class OrchestratorClient:
             "X-UIPATH-TenantName": self.tenant,
         }
 
-        headers["X-UIPATH-OrganizationUnitId"] = (
-            str(folder_id) if folder_id else self.account
-        )
+        if not account_level:
+            headers["X-UIPATH-OrganizationUnitId"] = (
+                str(folder_id) if folder_id else self.account
+            )
 
         return headers
 
+
     async def get(self, endpoint: str, folder_id: int | None = None):
-        """
-        Make a GET request to Orchestrator.
-        """
         if not OrchestratorClient._access_token:
             await self.authenticate()
 
-        url = f"{self.base_url}{self.account}/{self.tenant}/{endpoint}"
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
+
         response = await self.client.get(
-            url, headers=self.get_headers(folder_id)
+            url,
+            headers=self.get_headers(folder_id=folder_id)
         )
         response.raise_for_status()
         return response.json()
+
 
     async def post(self, endpoint: str, data: dict):
         """
@@ -146,6 +160,43 @@ class OrchestratorClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def _get_nuget_service(self, service_type: str) -> str:
+        """
+        Resolve a NuGet v3 service URL dynamically from the org NuGet index.
+        """
+        feed_url = os.getenv("NUGET_FEED_URL")
+        if not feed_url:
+            raise RuntimeError("NUGET_FEED_URL is not configured")
+
+        if not OrchestratorClient._access_token:
+            await self.authenticate()
+
+        response = await self.client.get(
+            feed_url,
+            headers={
+                "Authorization": f"Bearer {OrchestratorClient._access_token}",
+                "X-UIPATH-TenantName": self.tenant,
+                "Accept": "application/json",
+            }
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        for resource in data.get("resources", []):
+            types = resource.get("@type")
+            if isinstance(types, list):
+                if service_type in types:
+                    return resource["@id"]
+            elif types == service_type:
+                return resource["@id"]
+
+        raise RuntimeError(
+            f"NuGet service '{service_type}' not found in index"
+        )
+
+
 
     # -------------------------------------------------------------------------
     # Domain methods
@@ -168,7 +219,72 @@ class OrchestratorClient:
 
     async def get_processes(self, folder_id: int):
         return await self.get("odata/Releases", folder_id)
+    
+    async def list_libraries(self, search: str | None = None) -> list[str]:
+        """
+        List available UiPath library package names.
 
+        Args:
+            search: Optional substring to filter package names
+        """
+        data = await self.get("odata/Libraries")
+
+        names = {
+            lib.get("Id")
+            for lib in data.get("value", [])
+            if lib.get("Id")
+        }
+
+        if search:
+            search_lower = search.lower()
+            names = {
+                name for name in names
+                if search_lower in name.lower()
+            }
+
+        return sorted(names)
+
+    async def list_library_versions2(self, package_id: str) -> list[str]:
+        """
+        List available versions for a specific UiPath library package.
+        """
+        data = await self.get("odata/Libraries")
+
+        versions = {
+            lib.get("Version")
+            for lib in data.get("value", [])
+            if lib.get("Id") == package_id and lib.get("Version")
+        }
+
+        if not versions:
+            raise RuntimeError(
+                f"No versions found for library '{package_id}'"
+            )
+
+        return sorted(versions)
+
+    async def list_library_versions(self, package_id: str) -> list[str]:
+        """
+        List ALL versions of a UiPath library using the NuGet feed.
+        """
+        # NuGet flat container
+        base_url = await self._get_nuget_service("PackageBaseAddress/3.0.0")
+
+        pkg = package_id.lower()
+        index_url = urljoin(base_url, f"{pkg}/index.json")
+
+        response = await self.client.get(index_url)
+        response.raise_for_status()
+
+        data = response.json()
+        versions = data.get("versions", [])
+
+        if not versions:
+            raise RuntimeError(
+                f"No versions found for library '{package_id}' in NuGet feed"
+            )
+
+        return versions
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
