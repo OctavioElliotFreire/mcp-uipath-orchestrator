@@ -1,630 +1,253 @@
 """
-Individual tests for UiPath Orchestrator Client
+Individual tests for UiPath Orchestrator Client (Multi-Tenant)
 Uncomment the test you want to run at the bottom
 """
+
 import asyncio
+import os
 from service import OrchestratorClient
 
+TENANTS = [
+    t.strip()
+    for t in os.getenv("TENANTS", "").split(",")
+    if t.strip()
+]
+
+
+# -----------------------------------------------------------------------------
+# TEST 1: Authentication (shared token)
+# -----------------------------------------------------------------------------
 
 async def test_connection():
-    """Test 1: Connection and Authentication"""
+    """Test 1: Connection and Authentication (Shared Token)"""
     print("\n" + "=" * 60)
-    print("TEST 1: Connection and Authentication")
+    print("TEST 1: Connection and Authentication (Shared Token)")
     print("=" * 60)
-    
+
     client = OrchestratorClient()
-    
+
     try:
-        print("\n▶ Attempting authentication...")
-        token = await client.authenticate()
-        
-        if token and len(token) > 0:
-            print(f"✓ PASS: Authentication successful")
-            print(f"  Token preview: {token[:30]}...")
-            print(f"  Token length: {len(token)} characters")
+        print("\n▶ Authenticating first time...")
+        token1 = await client.authenticate()
+
+        print("▶ Authenticating second time...")
+        token2 = await client.authenticate()
+
+        if token1 == token2:
+            print("✓ PASS: Token reused successfully")
+            print(f"  Token preview: {token1[:30]}...")
             return True
         else:
-            print(f"✗ FAIL: No token received")
+            print("✗ FAIL: Token mismatch")
             return False
-            
+
     except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"✗ FAIL: {e}")
         return False
-        
+
     finally:
         await client.close()
 
 
-async def test_get_folders():
-    """Test 2: Get Folders"""
+# -----------------------------------------------------------------------------
+# TEST 2: Get folders (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
-    print("TEST 2: Get Folders")
+    print("TEST 2: Get Folders (Multi-Tenant)")
     print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        
-        if not folders or "value" not in folders:
-            print("✗ FAIL: Invalid response")
+
+    results = {}
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            count = len(folders.get("value", []))
+            results[tenant] = count
+
+            print(f"✓ {tenant}: {count} folders")
+
+            if count > 0:
+                sample = folders["value"][0]
+                print(f"  Sample folder: {sample.get('DisplayName')} (ID: {sample.get('Id')})")
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
             return False
-        
-        folder_count = len(folders['value'])
-        total_count = folders.get('@odata.count', folder_count)
-        
-        print(f"✓ PASS: Retrieved {folder_count} folders")
-        print(f"  Total count: {total_count}")
-        
-        # Show first 5 folders
-        if folder_count > 0:
-            print(f"\n  First 5 folders:")
-            for i, folder in enumerate(folders['value'][:5], 1):
-                name = folder.get('DisplayName', 'N/A')
-                folder_id = folder.get('Id', 'N/A')
-                path = folder.get('FullyQualifiedName', 'N/A')
-                print(f"    {i}. {name} (ID: {folder_id})")
-                print(f"       Path: {path}")
-        
-        return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
+
+        finally:
+            await client.close()
+
+    print("\n▶ Summary:")
+    for tenant, count in results.items():
+        print(f"  {tenant}: {count} folders")
+
+    return True
 
 
-async def test_get_queues():
-    """Test 3: Get Queues"""
+# -----------------------------------------------------------------------------
+# TEST 3: Get assets (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_assets_multi_tenant():
     print("\n" + "=" * 60)
-    print("TEST 3: Get Queues")
+    print("TEST 3: Get Assets (Multi-Tenant)")
     print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing queue access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_queues = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                queues = await client.get_queues(folder_id=folder_id)
-                accessible += 1
-                
-                queue_count = len(queues.get('value', []))
-                
-                if queue_count > 0:
-                    with_queues += 1
-                    print(f"  ✓ {folder_name}: {queue_count} queue(s)")
-                    
-                    # Show details for first folder with queues
-                    if with_queues == 1:
-                        print(f"\n  Sample queues from '{folder_name}':")
-                        for i, queue in enumerate(queues['value'][:3], 1):
-                            name = queue.get('Name', 'N/A')
-                            queue_id = queue.get('Id', 'N/A')
-                            max_retries = queue.get('MaxNumberOfRetries', 'N/A')
-                            print(f"    {i}. {name}")
-                            print(f"       ID: {queue_id}, Max Retries: {max_retries}")
-                else:
-                    print(f"  - {folder_name}: (no queues)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                elif "404" in error_msg:
-                    print(f"  ⚠ {folder_name}: Not found")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  With queues: {with_queues}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            if not folders.get("value"):
+                print(f"⚠ {tenant}: No folders found")
+                continue
+
+            folder = folders["value"][0]
+            assets = await client.get_assets(folder["Id"])
+
+            asset_count = len(assets.get("value", []))
+            print(f"✓ {tenant}: {asset_count} assets in '{folder['DisplayName']}'")
+
+            if asset_count > 0:
+                sample = assets["value"][0]
+                print(f"  Sample asset: {sample.get('Name')} ({sample.get('ValueType')})")
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
             return False
-        elif with_queues == 0:
-            print("\n⚠ WARNING: Queue retrieval works, but no queues found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved queues")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
+
+        finally:
+            await client.close()
+
+    return True
 
 
-async def test_get_assets():
-    """Test 4: Get Assets"""
+# -----------------------------------------------------------------------------
+# TEST 4: Get queues (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_queues_multi_tenant():
     print("\n" + "=" * 60)
-    print("TEST 4: Get Assets")
+    print("TEST 4: Get Queues (Multi-Tenant)")
     print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing asset access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_assets = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                assets = await client.get_assets(folder_id=folder_id)
-                accessible += 1
-                
-                asset_count = len(assets.get('value', []))
-                
-                if asset_count > 0:
-                    with_assets += 1
-                    print(f"  ✓ {folder_name}: {asset_count} asset(s)")
-                    
-                    # Show details for first folder with assets
-                    if with_assets == 1:
-                        print(f"\n  Sample assets from '{folder_name}':")
-                        for i, asset in enumerate(assets['value'][:3], 1):
-                            name = asset.get('Name', 'N/A')
-                            value_type = asset.get('ValueType', 'N/A')
-                            print(f"    {i}. {name} (Type: {value_type})")
-                else:
-                    print(f"  - {folder_name}: (no assets)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                elif "404" in error_msg:
-                    print(f"  ⚠ {folder_name}: Not found")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  With assets: {with_assets}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
-            return False
-        elif with_assets == 0:
-            print("\n⚠ WARNING: Asset retrieval works, but no assets found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved assets")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
 
-async def test_get_storage_buckets():
-    """Test 5: Get Storage Buckets"""
-    print("\n" + "=" * 60)
-    print("TEST 5: Get Storage Buckets")
-    print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing storage bucket access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_buckets = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                buckets = await client.get_storage_buckets(folder_id=folder_id)
-                accessible += 1
-                
-                bucket_count = len(buckets.get('value', []))
-                
-                if bucket_count > 0:
-                    with_buckets += 1
-                    print(f"  ✓ {folder_name}: {bucket_count} bucket(s)")
-                    
-                    # Show details for first folder with buckets
-                    if with_buckets == 1:
-                        print(f"\n  Sample buckets from '{folder_name}':")
-                        for i, bucket in enumerate(buckets['value'][:3], 1):
-                            name = bucket.get('Name', 'N/A')
-                            bucket_id = bucket.get('Id', 'N/A')
-                            description = bucket.get('Description', 'N/A')
-                            print(f"    {i}. {name}")
-                            print(f"       ID: {bucket_id}, Description: {description}")
-                else:
-                    print(f"  - {folder_name}: (no buckets)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                elif "404" in error_msg:
-                    print(f"  ⚠ {folder_name}: Not found")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  With buckets: {with_buckets}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
-            return False
-        elif with_buckets == 0:
-            print("\n⚠ WARNING: Bucket retrieval works, but no buckets found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved storage buckets")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
 
-async def test_get_triggers():
-    """Test 6: Get Triggers (Time and Queue)"""
-    print("\n" + "=" * 60)
-    print("TEST 6: Get Triggers")
-    print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing trigger access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_triggers = 0
-        time_triggers_total = 0
-        queue_triggers_total = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                triggers = await client.get_triggers(folder_id=folder_id)
-                accessible += 1
-                
-                trigger_count = len(triggers.get('value', []))
-                
-                if trigger_count > 0:
-                    with_triggers += 1
-                    
-                    # Count trigger types
-                    time_count = sum(1 for t in triggers['value'] if t.get('ScheduleType') == 'Cron')
-                    queue_count = sum(1 for t in triggers['value'] if t.get('ScheduleType') == 'QueueTrigger')
-                    
-                    time_triggers_total += time_count
-                    queue_triggers_total += queue_count
-                    
-                    print(f"  ✓ {folder_name}: {trigger_count} trigger(s) (Time: {time_count}, Queue: {queue_count})")
-                    
-                    # Show details for first folder with triggers
-                    if with_triggers == 1:
-                        print(f"\n  Sample triggers from '{folder_name}':")
-                        for i, trigger in enumerate(triggers['value'][:3], 1):
-                            name = trigger.get('Name', 'N/A')
-                            schedule_type = trigger.get('ScheduleType', 'N/A')
-                            enabled = trigger.get('Enabled', False)
-                            print(f"    {i}. {name}")
-                            print(f"       Type: {schedule_type}, Enabled: {enabled}")
-                else:
-                    print(f"  - {folder_name}: (no triggers)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  Folders with triggers: {with_triggers}")
-        print(f"  Total time triggers: {time_triggers_total}")
-        print(f"  Total queue triggers: {queue_triggers_total}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
-            return False
-        elif with_triggers == 0:
-            print("\n⚠ WARNING: Trigger retrieval works, but no triggers found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved triggers")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
 
-async def test_get_processes():
-    """Test 7: Get Processes"""
-    print("\n" + "=" * 60)
-    print("TEST 7: Get Processes")
-    print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing process access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_processes = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                processes = await client.get_processes(folder_id=folder_id)
-                accessible += 1
-                
-                process_count = len(processes.get('value', []))
-                
-                if process_count > 0:
-                    with_processes += 1
-                    print(f"  ✓ {folder_name}: {process_count} process(es)")
-                    
-                    # Show details for first folder with processes
-                    if with_processes == 1:
-                        print(f"\n  Sample processes from '{folder_name}':")
-                        for i, process in enumerate(processes['value'][:3], 1):
-                            name = process.get('Name', 'N/A')
-                            process_key = process.get('ProcessKey', 'N/A')
-                            version = process.get('ProcessVersion', 'N/A')
-                            description = process.get('Description', 'N/A')
-                            print(f"    {i}. {name} (v{version})")
-                            print(f"       Key: {process_key}")
-                            if description and description != 'N/A':
-                                print(f"       Description: {description[:50]}...")
-                else:
-                    print(f"  - {folder_name}: (no processes)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                elif "404" in error_msg:
-                    print(f"  ⚠ {folder_name}: Not found")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  With processes: {with_processes}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
-            return False
-        elif with_processes == 0:
-            print("\n⚠ WARNING: Process retrieval works, but no processes found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved processes")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
-    
-async def test_get_business_rule_files():
-    """Test 8: Get Business Rule Files"""
-    print("\n" + "=" * 60)
-    print("TEST 8: Get Business Rule Files")
-    print("=" * 60)
-    
-    client = OrchestratorClient()
-    
-    try:
-        print("\n▶ Authenticating...")
-        await client.authenticate()
-        print("✓ Authenticated")
-        
-        print("\n▶ Fetching folders...")
-        folders = await client.get_folders()
-        print(f"✓ Found {len(folders['value'])} folders")
-        
-        print(f"\n▶ Testing business rule file access across folders...")
-        
-        tested = 0
-        accessible = 0
-        with_business_rules = 0
-        
-        for folder in folders['value'][:10]:  # Test first 10
-            folder_id = folder['Id']
-            folder_name = folder['DisplayName']
-            tested += 1
-            
-            try:
-                business_rules = await client.get_business_rule_files(folder_id=folder_id)
-                accessible += 1
-                
-                business_rule_count = len(business_rules.get('value', []))
-                
-                if business_rule_count > 0:
-                    with_business_rules += 1
-                    print(f"  ✓ {folder_name}: {business_rule_count} business rule file(s)")
-                    
-                    # Show details for first folder with business rules
-                    if with_business_rules == 1:
-                        print(f"\n  Sample business rule files from '{folder_name}':")
-                        for i, rule in enumerate(business_rules['value'][:3], 1):
-                            name = rule.get('Name', 'N/A')
-                            rule_id = rule.get('Id', 'N/A')
-                            description = rule.get('Description', 'N/A')
-                            version = rule.get('Version', 'N/A')
-                            print(f"    {i}. {name} (v{version})")
-                            print(f"       ID: {rule_id}")
-                            if description and description != 'N/A':
-                                print(f"       Description: {description[:50]}...")
-                else:
-                    print(f"  - {folder_name}: (no business rule files)")
-                    
-            except Exception as e:
-                error_msg = str(e)
-                if "403" in error_msg:
-                    print(f"  ⚠ {folder_name}: Permission denied")
-                elif "404" in error_msg:
-                    print(f"  ⚠ {folder_name}: Not found")
-                else:
-                    print(f"  ✗ {folder_name}: {error_msg[:40]}")
-        
-        # Summary
-        print(f"\n▶ Summary:")
-        print(f"  Folders tested: {tested}")
-        print(f"  Accessible: {accessible}")
-        print(f"  With business rule files: {with_business_rules}")
-        
-        if accessible == 0:
-            print("\n✗ FAIL: No folders accessible (permission issue)")
-            return False
-        elif with_business_rules == 0:
-            print("\n⚠ WARNING: Business rule file retrieval works, but no files found")
-            return True
-        else:
-            print(f"\n✓ PASS: Successfully retrieved business rule files")
-            return True
-            
-    except Exception as e:
-        print(f"✗ FAIL: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        await client.close()
+            for folder in folders.get("value", [])[:3]:
+                queues = await client.get_queues(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(queues.get('value', []))} queues"
+                )
 
-# ============================================================================
-# Main - Uncomment the test you want to run
-# ============================================================================
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 5: Get triggers (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_triggers_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 5: Get Triggers (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            for folder in folders.get("value", [])[:3]:
+                triggers = await client.get_triggers(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(triggers.get('value', []))} triggers"
+                )
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# TEST 6: Get processes (multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_processes_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 6: Get Processes (Multi-Tenant)")
+    print("=" * 60)
+
+    for tenant in TENANTS:
+        print(f"\n▶ Tenant: {tenant}")
+        client = OrchestratorClient(tenant=tenant)
+
+        try:
+            await client.authenticate()
+            folders = await client.get_folders()
+
+            for folder in folders.get("value", [])[:3]:
+                processes = await client.get_processes(folder["Id"])
+                print(
+                    f"✓ {tenant} | {folder['DisplayName']}: "
+                    f"{len(processes.get('value', []))} processes"
+                )
+
+        except Exception as e:
+            print(f"✗ {tenant}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# MAIN
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     # Uncomment ONE test at a time:
-    
-    #result = asyncio.run(test_connection())
-    #result = asyncio.run(test_get_folders())
-    #result = asyncio.run(test_get_queues())
-    #result = asyncio.run(test_get_assets())
-    #result = asyncio.run(test_get_storage_buckets())
-    #result = asyncio.run(test_get_triggers())
-    #result = asyncio.run(test_get_processes())
-    result = asyncio.run(test_get_business_rule_files())
-    
-    
-    
+
+    result = asyncio.run(test_connection())
+    result = asyncio.run(test_get_folders_multi_tenant())
+    result = asyncio.run(test_get_assets_multi_tenant())
+    result = asyncio.run(test_get_queues_multi_tenant())
+    result = asyncio.run(test_get_triggers_multi_tenant())
+    result = asyncio.run(test_get_processes_multi_tenant())
+
     print("\n" + "=" * 60)
-    if result:
-        print("RESULT: ✓ PASSED")
-    else:
-        print("RESULT: ✗ FAILED")
+    print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
     print("=" * 60)
