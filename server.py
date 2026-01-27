@@ -122,6 +122,26 @@ async def list_triggers(tenant: str, folder_id: int) -> str:
     triggersets = await client.get_triggers(folder_id)
     return json.dumps(triggersets, indent=2)
 
+@mcp.tool()
+async def list_libraries(tenant: str, search: str | None = None) -> list[str]:
+    """
+    List available UiPath library package names.
+
+    Args:
+        tenant: UiPath tenant name
+        search: Optional substring to narrow results
+    """
+    client = await get_client(tenant)
+    return await client.list_libraries(search)
+
+@mcp.tool()
+async def list_library_versions(tenant: str, package_id: str) -> list[str]:
+    """
+    List available versions for a UiPath library.
+    """
+    client = await get_client(tenant)
+    return await client.list_library_versions(package_id)
+
 
 
 # -----------------------------------------------------------------------------
