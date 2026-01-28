@@ -47,6 +47,7 @@ class OrchestratorClient:
     def __init__(self, tenant: str | None = None):
         self.base_url = _require(ORCHESTRATOR_URL, "ORCHESTRATOR_URL")
         self.account = _require(ACCOUNT_LOGICAL_NAME, "ACCOUNT_LOGICAL_NAME")
+        self.donwload_dir = DOWNLOAD_DIR
 
         if not TENANTS:
             raise RuntimeError("TENANTS is empty")
@@ -176,8 +177,7 @@ class OrchestratorClient:
                 f"LIBRARIES_FEED_ID_MAP contains invalid JSON: {e}"
             )
 
-        print("DEBUG: parsed feed map =", mapping)
-
+        
         feed_id = mapping.get(self.tenant)
         if not feed_id:
             raise RuntimeError(
@@ -239,8 +239,7 @@ class OrchestratorClient:
     async def download_library_version(
         self,
         package_id: str,
-        version: str,
-        output_dir: Path | str = "downloads"
+        version: str
     ) -> Path:
         """
         Download a specific version of a UiPath library (.nupkg)
@@ -288,11 +287,12 @@ class OrchestratorClient:
         download_url = f"{base_addr.rstrip('/')}/{pkg}/{ver}/{pkg}.{ver}.nupkg"
 
         # 4) Download file
-        output_dir = Path(output_dir)
+        
+        output_dir = Path(self.donwload_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = output_dir / f"{package_id}.{version}.nupkg"
-
+        print(output_path)
         resp = await self.client.get(download_url, headers=headers)
         resp.raise_for_status()
 

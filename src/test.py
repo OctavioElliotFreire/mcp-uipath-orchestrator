@@ -345,7 +345,7 @@ async def test_download_library_version():
             print("✗ FAIL: No libraries found")
             return False
 
-        package_id = libraries[0]
+        package_id =  libraries[0]
         print(f"▶ Selected library: {package_id}")
 
         print("▶ Fetching versions...")
@@ -355,7 +355,7 @@ async def test_download_library_version():
             return False
 
         # Pick latest version
-        version = versions[-1]
+        version = versions[0]
         print(f"▶ Downloading version: {version}")
 
         path = await client.download_library_version(
@@ -405,9 +405,6 @@ if __name__ == "__main__":
     #result = asyncio.run(test_get_queues_multi_tenant())
     #result = asyncio.run(test_get_triggers_multi_tenant())
     #result = asyncio.run(test_get_processes_multi_tenant())
-    result = asyncio.run(test_list_library_versions_flow())
+    #result = asyncio.run(test_list_library_versions_flow())
     result = asyncio.run(test_download_library_version())
 
-    print("\n" + "=" * 60)
-    print("RESULT:", "✓ PASSED" if result else "✗ FAILED")
-    print("=" * 60)
