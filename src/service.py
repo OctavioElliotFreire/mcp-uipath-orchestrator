@@ -2,6 +2,7 @@ import os
 import json
 import httpx
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
 
@@ -13,6 +14,7 @@ ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL")
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 ACCOUNT_LOGICAL_NAME = os.getenv("ACCOUNT_LOGICAL_NAME")
+DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR")
 
 TENANTS = [
     t.strip().upper()
@@ -45,6 +47,7 @@ class OrchestratorClient:
     def __init__(self, tenant: str | None = None):
         self.base_url = _require(ORCHESTRATOR_URL, "ORCHESTRATOR_URL")
         self.account = _require(ACCOUNT_LOGICAL_NAME, "ACCOUNT_LOGICAL_NAME")
+        self.donwload_dir = DOWNLOAD_DIR
 
         if not TENANTS:
             raise RuntimeError("TENANTS is empty")
@@ -174,8 +177,7 @@ class OrchestratorClient:
                 f"LIBRARIES_FEED_ID_MAP contains invalid JSON: {e}"
             )
 
-        print("DEBUG: parsed feed map =", mapping)
-
+        
         feed_id = mapping.get(self.tenant)
         if not feed_id:
             raise RuntimeError(
@@ -233,6 +235,70 @@ class OrchestratorClient:
             raise RuntimeError(f"No versions found for '{package_id}'")
 
         return sorted(versions)
+
+    async def download_library_version(
+        self,
+        package_id: str,
+        version: str
+    ) -> Path:
+        """
+        Download a specific version of a UiPath library (.nupkg)
+        from the tenant-scoped Orchestrator NuGet feed.
+
+        Returns the path to the downloaded file.
+        """
+        if not OrchestratorClient._access_token:
+            await self.authenticate()
+
+        feed_id = self._get_libraries_feed_id()
+
+        index_url = (
+            f"{self.base_url}{self.account}/{self.tenant}"
+            f"/orchestrator_/nuget/v3/{feed_id}/index.json"
+        )
+
+        headers = {
+            "Authorization": f"Bearer {OrchestratorClient._access_token}",
+            "Accept": "application/json",
+        }
+
+        # 1) Fetch NuGet service index
+        r = await self.client.get(index_url, headers=headers)
+        r.raise_for_status()
+        index = r.json()
+
+        # 2) Locate PackageBaseAddress
+        base_addr = None
+        for res in index.get("resources", []):
+            t = res.get("@type")
+            if t == "PackageBaseAddress/3.0.0" or (
+                isinstance(t, list) and "PackageBaseAddress/3.0.0" in t
+            ):
+                base_addr = res["@id"]
+                break
+
+        if not base_addr:
+            raise RuntimeError("PackageBaseAddress/3.0.0 not found in NuGet index")
+
+        # 3) Build download URL
+        pkg = package_id.lower()
+        ver = version.lower()
+
+        download_url = f"{base_addr.rstrip('/')}/{pkg}/{ver}/{pkg}.{ver}.nupkg"
+
+        # 4) Download file
+        
+        output_dir = Path(self.donwload_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir / f"{package_id}.{version}.nupkg"
+        print(output_path)
+        resp = await self.client.get(download_url, headers=headers)
+        resp.raise_for_status()
+
+        output_path.write_bytes(resp.content)
+
+        return output_path
 
     # -------------------------------------------------------------------------
     # Cleanup

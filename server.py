@@ -123,7 +123,7 @@ async def list_triggers(tenant: str, folder_id: int) -> str:
     return json.dumps(triggersets, indent=2)
 
 @mcp.tool()
-async def list_libraries(tenant: str, search: str | None = None) -> list[str]:
+async def list_libraries(tenant: str) -> list[str]:
     """
     List available UiPath library package names.
 
@@ -132,7 +132,7 @@ async def list_libraries(tenant: str, search: str | None = None) -> list[str]:
         search: Optional substring to narrow results
     """
     client = await get_client(tenant)
-    return await client.list_libraries(search)
+    return await client.list_libraries()
 
 @mcp.tool()
 async def list_library_versions(tenant: str, package_id: str) -> list[str]:
@@ -141,6 +141,25 @@ async def list_library_versions(tenant: str, package_id: str) -> list[str]:
     """
     client = await get_client(tenant)
     return await client.list_library_versions(package_id)
+
+@mcp.tool()
+async def download_library_version(
+    tenant: str,
+    package_id: str,
+    version: str
+) -> str:
+    """
+    Download a specific version of a UiPath library (.nupkg)
+    using the configured download directory.
+
+    Returns the local file path.
+    """
+    client = await get_client(tenant)
+    path = await client.download_library_version(
+        package_id=package_id,
+        version=version
+    )
+    return str(path)
 
 
 
