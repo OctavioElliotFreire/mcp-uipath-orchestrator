@@ -68,6 +68,46 @@ async def list_assets(tenant: str, folder_id: int) -> str:
     assets = await client.get_assets(folder_id)
     return json.dumps(assets, indent=2)
 
+@mcp.tool()
+async def list_queues(tenant: str, folder_id: int) -> str:
+    """
+    List queues in a folder for a specific UiPath tenant.
+
+    Args:
+        tenant: UiPath tenant name
+        folder_id: Folder ID
+    """
+    client = await get_client(tenant)
+    queues = await client.get_queues(folder_id)
+    return json.dumps(queues, indent=2)
+
+@mcp.tool()
+async def list_storage_buckets(tenant: str, folder_id: int) -> str:
+    """
+    List storage buckets in a folder for a specific UiPath tenant.
+
+    Args:
+        tenant: UiPath tenant name
+        folder_id: Folder ID
+    """
+    client = await get_client(tenant)
+    buckets = await client.get_storage_buckets(folder_id)
+    return json.dumps(buckets, indent=2)
+
+@mcp.tool()
+async def list_processes(tenant: str, folder_id: int) -> str:
+    """
+    List processes (releases) in a folder for a specific UiPath tenant.
+
+    Args:
+        tenant: UiPath tenant name
+        folder_id: Folder ID
+    """
+    client = await get_client(tenant)
+    processes = await client.get_processes(folder_id)
+    return json.dumps(processes, indent=2)
+
+
 
 @mcp.tool()
 async def list_triggers(tenant: str, folder_id: int) -> str:
@@ -81,6 +121,46 @@ async def list_triggers(tenant: str, folder_id: int) -> str:
     client = await get_client(tenant)
     triggersets = await client.get_triggers(folder_id)
     return json.dumps(triggersets, indent=2)
+
+@mcp.tool()
+async def list_libraries(tenant: str) -> list[str]:
+    """
+    List available UiPath library package names.
+
+    Args:
+        tenant: UiPath tenant name
+        search: Optional substring to narrow results
+    """
+    client = await get_client(tenant)
+    return await client.list_libraries()
+
+@mcp.tool()
+async def list_library_versions(tenant: str, package_id: str) -> list[str]:
+    """
+    List available versions for a UiPath library.
+    """
+    client = await get_client(tenant)
+    return await client.list_library_versions(package_id)
+
+@mcp.tool()
+async def download_library_version(
+    tenant: str,
+    package_id: str,
+    version: str
+) -> str:
+    """
+    Download a specific version of a UiPath library (.nupkg)
+    using the configured download directory.
+
+    Returns the local file path.
+    """
+    client = await get_client(tenant)
+    path = await client.download_library_version(
+        package_id=package_id,
+        version=version
+    )
+    return str(path)
+
 
 
 # -----------------------------------------------------------------------------
