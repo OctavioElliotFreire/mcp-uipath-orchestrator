@@ -1,0 +1,35 @@
+{
+  "<account_logical_name_1>": {
+    "base_url": "https://cloud.uipath.com/",
+    "auth": {
+      "client_id": "",
+      "client_secret": ""
+    },
+    "download_dir": "",
+    "tenants": {
+      "DEV": {
+        "libraries_feed_id": ""
+      },
+      "PROD": {
+        "libraries_feed_id": ""
+      },
+      "DefaultTenant": {
+        "libraries_feed_id": ""
+      }
+    }
+  },
+
+  "<account_logical_name_2>": {
+    "base_url": "https://cloud.uipath.com/",
+    "auth": {
+      "client_id": "",
+      "client_secret": ""
+    },
+    "download_dir": "",
+    "tenants": {
+      "DefaultTenant": {
+        "libraries_feed_id": ""
+      }
+    }
+  }
+}
