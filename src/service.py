@@ -1,32 +1,91 @@
 import os
 import json
 import httpx
-from dotenv import load_dotenv
 from pathlib import Path
+from typing import TypedDict
 
-load_dotenv()
+# -----------------------------------------------------------------------------
+# Configuration Types
+# -----------------------------------------------------------------------------
+
+class AuthConfig(TypedDict):
+    client_id: str
+    client_secret: str
+
+class TenantConfig(TypedDict):
+    libraries_feed_id: str
+
+class AccountConfig(TypedDict):
+    base_url: str
+    auth: AuthConfig
+    download_dir: str
+    tenants: dict[str, TenantConfig]
+
+class Config(TypedDict):
+    accounts: dict[str, AccountConfig]
 
 # -----------------------------------------------------------------------------
 # Global configuration
 # -----------------------------------------------------------------------------
 
-ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-ACCOUNT_LOGICAL_NAME = os.getenv("ACCOUNT_LOGICAL_NAME")
-DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR")
-
-TENANTS = [
-    t.strip().upper()
-    for t in os.getenv("TENANTS", "").split(",")
-    if t.strip()
-]
 
 
-def _require(value: str | None, name: str) -> str:
-    if not value:
-        raise RuntimeError(f"Required configuration '{name}' is not set")
-    return value
+def load_config() -> Config:
+    """Load multi-orchestrator configuration from config.json"""
+    # service.py is in src/, so we need parent.parent to get to project root
+    project_root = Path(__file__).resolve().parent.parent  # ← Add second .parent
+    config_path = project_root / "config" / "config.json"
+    
+    # ... rest stays the same
+    
+    if not config_path.exists():
+        raise RuntimeError(f"Configuration file not found: {config_path}")
+    
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Invalid JSON in config file: {e}")
+    
+    # Validate structure
+    if not isinstance(data, dict):
+        raise RuntimeError("Config must be a JSON object")
+    
+    for account_name, account_config in data.items():
+        required_fields = ["base_url", "auth", "download_dir", "tenants"]
+        for field in required_fields:
+            if field not in account_config:
+                raise RuntimeError(
+                    f"Account '{account_name}' missing required field '{field}'"
+                )
+        
+        # Validate auth
+        if "client_id" not in account_config["auth"]:
+            raise RuntimeError(
+                f"Account '{account_name}' missing 'client_id' in auth"
+            )
+        if "client_secret" not in account_config["auth"]:
+            raise RuntimeError(
+                f"Account '{account_name}' missing 'client_secret' in auth"
+            )
+        
+        # Validate tenants
+        if not account_config["tenants"]:
+            raise RuntimeError(
+                f"Account '{account_name}' has no tenants configured"
+            )
+        
+        for tenant_name, tenant_config in account_config["tenants"].items():
+            if "libraries_feed_id" not in tenant_config:
+                raise RuntimeError(
+                    f"Tenant '{tenant_name}' in account '{account_name}' "
+                    f"missing 'libraries_feed_id'"
+                )
+    
+    return {"accounts": data}
+
+# Load configuration at module level
+CONFIG = load_config()
 
 
 # -----------------------------------------------------------------------------
@@ -35,36 +94,54 @@ def _require(value: str | None, name: str) -> str:
 
 class OrchestratorClient:
     """
-    UiPath Orchestrator client (multi-tenant).
+    UiPath Orchestrator client (multi-tenant, multi-account).
 
-    - TENANTS is an allow-list
-    - LIBRARIES_FEED_ID_MAP provides tenant → feed mapping
+    - Reads configuration from CONFIG (loaded from config.json)
     - OAuth (Secure Deployment) only
+    - Supports multiple accounts and tenants per account
+    - Each instance maintains its own authentication token
     """
 
-    _access_token: str | None = None
+    # DO NOT add _access_token here as a class variable!
 
-    def __init__(self, tenant: str | None = None):
-        self.base_url = _require(ORCHESTRATOR_URL, "ORCHESTRATOR_URL")
-        self.account = _require(ACCOUNT_LOGICAL_NAME, "ACCOUNT_LOGICAL_NAME")
-        self.donwload_dir = DOWNLOAD_DIR
-
-        if not TENANTS:
-            raise RuntimeError("TENANTS is empty")
-
-        tenant = tenant.upper() if tenant else TENANTS[0]
-
-        if tenant not in TENANTS:
+    def __init__(self, account: str, tenant: str):
+        """
+        Initialize Orchestrator client for a specific account and tenant.
+        
+        Args:
+            account: Account logical name (e.g., "billiysusldx")
+            tenant: Tenant name within the account (e.g., "DEV", "PROD")
+        """
+        # Validate account exists
+        if account not in CONFIG["accounts"]:
+            available = list(CONFIG["accounts"].keys())
             raise RuntimeError(
-                f"Tenant '{tenant}' is not allowed. Allowed tenants: {TENANTS}"
+                f"Account '{account}' not found in config. "
+                f"Available accounts: {available}"
             )
-
+        
+        account_config = CONFIG["accounts"][account]
+        
+        # Validate tenant exists in account
+        if tenant not in account_config["tenants"]:
+            available = list(account_config["tenants"].keys())
+            raise RuntimeError(
+                f"Tenant '{tenant}' not found in account '{account}'. "
+                f"Available tenants: {available}"
+            )
+        
+        # Store configuration
+        self.account = account
         self.tenant = tenant
-
-        # NOTE:
-        # Do NOT validate NuGet here.
-        # NuGet is only required for list_library_versions.
-
+        self.base_url = account_config["base_url"]
+        self.download_dir = account_config["download_dir"]
+        self.client_id = account_config["auth"]["client_id"]
+        self.client_secret = account_config["auth"]["client_secret"]
+        self.libraries_feed_id = account_config["tenants"][tenant]["libraries_feed_id"]
+        
+        # Instance-level token (CRITICAL: each instance gets its own token)
+        self._access_token: str | None = None
+        
         self.client = httpx.AsyncClient(
             timeout=30.0,
             follow_redirects=False,
@@ -75,33 +152,33 @@ class OrchestratorClient:
     # -------------------------------------------------------------------------
 
     async def authenticate(self) -> str:
-        if OrchestratorClient._access_token:
-            return OrchestratorClient._access_token
+        if self._access_token:
+            return self._access_token
 
         auth_url = f"{self.base_url}identity_/connect/token"
 
         data = {
             "grant_type": "client_credentials",
-            "client_id": _require(CLIENT_ID, "CLIENT_ID"),
-            "client_secret": _require(CLIENT_SECRET, "CLIENT_SECRET"),
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
         }
 
         r = await self.client.post(auth_url, data=data)
         r.raise_for_status()
 
-        OrchestratorClient._access_token = r.json()["access_token"]
-        return OrchestratorClient._access_token
+        self._access_token = r.json()["access_token"]
+        return self._access_token
 
     # -------------------------------------------------------------------------
     # Headers
     # -------------------------------------------------------------------------
 
     def _orchestrator_headers(self, folder_id: int | None = None) -> dict:
-        if not OrchestratorClient._access_token:
+        if not self._access_token:
             raise RuntimeError("Client not authenticated")
 
         headers = {
-            "Authorization": f"Bearer {OrchestratorClient._access_token}",
+            "Authorization": f"Bearer {self._access_token}",
             "Content-Type": "application/json",
             "X-UIPATH-TenantName": self.tenant,
         }
@@ -118,7 +195,7 @@ class OrchestratorClient:
     # -------------------------------------------------------------------------
 
     async def get(self, endpoint: str, folder_id: int | None = None):
-        if not OrchestratorClient._access_token:
+        if not self._access_token:
             await self.authenticate()
 
         url = (
@@ -152,6 +229,9 @@ class OrchestratorClient:
     async def get_processes(self, folder_id: int):
         return await self.get("odata/Releases", folder_id)
 
+    async def get_storage_buckets(self, folder_id: int):
+        return await self.get("odata/BucketDefinitions", folder_id)
+
     async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
         return sorted(
@@ -164,44 +244,17 @@ class OrchestratorClient:
     # NuGet helpers
     # -------------------------------------------------------------------------
 
-    def _get_libraries_feed_id(self) -> str:
-        raw = os.getenv("LIBRARIES_FEED_ID_MAP")
-
-        if not raw:
-            raise RuntimeError("LIBRARIES_FEED_ID_MAP is not set")
-
-        try:
-            mapping = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"LIBRARIES_FEED_ID_MAP contains invalid JSON: {e}"
-            )
-
-        
-        feed_id = mapping.get(self.tenant)
-        if not feed_id:
-            raise RuntimeError(
-                f"No Libraries feed ID configured for tenant '{self.tenant}'"
-            )
-
-       
-
-        return feed_id
-
-
     async def list_library_versions(self, package_id: str) -> list[str]:
-        if not OrchestratorClient._access_token:
+        if not self._access_token:
             await self.authenticate()
-
-        feed_id = self._get_libraries_feed_id()
 
         index_url = (
             f"{self.base_url}{self.account}/{self.tenant}"
-            f"/orchestrator_/nuget/v3/{feed_id}/index.json"
+            f"/orchestrator_/nuget/v3/{self.libraries_feed_id}/index.json"
         )
 
         headers = {
-            "Authorization": f"Bearer {OrchestratorClient._access_token}",
+            "Authorization": f"Bearer {self._access_token}",
             "Accept": "application/json",
         }
 
@@ -247,18 +300,16 @@ class OrchestratorClient:
 
         Returns the path to the downloaded file.
         """
-        if not OrchestratorClient._access_token:
+        if not self._access_token:
             await self.authenticate()
-
-        feed_id = self._get_libraries_feed_id()
 
         index_url = (
             f"{self.base_url}{self.account}/{self.tenant}"
-            f"/orchestrator_/nuget/v3/{feed_id}/index.json"
+            f"/orchestrator_/nuget/v3/{self.libraries_feed_id}/index.json"
         )
 
         headers = {
-            "Authorization": f"Bearer {OrchestratorClient._access_token}",
+            "Authorization": f"Bearer {self._access_token}",
             "Accept": "application/json",
         }
 
@@ -287,12 +338,10 @@ class OrchestratorClient:
         download_url = f"{base_addr.rstrip('/')}/{pkg}/{ver}/{pkg}.{ver}.nupkg"
 
         # 4) Download file
-        
-        output_dir = Path(self.donwload_dir)
+        output_dir = Path(self.download_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = output_dir / f"{package_id}.{version}.nupkg"
-        print(output_path)
         resp = await self.client.get(download_url, headers=headers)
         resp.raise_for_status()
 
