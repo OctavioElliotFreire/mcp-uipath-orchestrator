@@ -28,15 +28,11 @@ class Config(TypedDict):
 # Global configuration
 # -----------------------------------------------------------------------------
 
-
-
 def load_config() -> Config:
     """Load multi-orchestrator configuration from config.json"""
     # service.py is in src/, so we need parent.parent to get to project root
     project_root = Path(__file__).resolve().parent.parent  # ← Add second .parent
     config_path = project_root / "config" / "config.json"
-    
-    # ... rest stays the same
     
     if not config_path.exists():
         raise RuntimeError(f"Configuration file not found: {config_path}")
@@ -101,8 +97,6 @@ class OrchestratorClient:
     - Supports multiple accounts and tenants per account
     - Each instance maintains its own authentication token
     """
-
-    # DO NOT add _access_token here as a class variable!
 
     def __init__(self, account: str, tenant: str):
         """
@@ -239,6 +233,119 @@ class OrchestratorClient:
             for lib in data.get("value", [])
             if lib.get("Id")
         )
+
+    # -------------------------------------------------------------------------
+    # Consolidated resource fetching
+    # -------------------------------------------------------------------------
+
+    async def get_resources(
+        self,
+        resource_types: list[str],
+        folder_id: int
+    ) -> dict:
+        """
+        Get specified resource types from a folder with concurrent execution.
+        
+        This method orchestrates calls to existing tested methods:
+        - get_assets()
+        - get_queues()
+        - get_processes()
+        - get_triggers()
+        - get_storage_buckets()
+        
+        Args:
+            resource_types: List of resource types to fetch. Valid options:
+                - "assets": Configuration assets (get_assets)
+                - "queues": Work queues (get_queues)
+                - "processes": Process releases (get_processes)
+                - "triggers": Automation triggers (get_triggers)
+                - "storage_buckets": Storage buckets (get_storage_buckets)
+            folder_id: Folder ID
+            
+        Returns:
+            Dictionary with structure:
+            {
+                "resources": {
+                    "assets": {"count": int, "items": list},
+                    "queues": {"count": int, "items": list},
+                    ...
+                }
+            }
+            
+        Raises:
+            ValueError: If resource_types is invalid or empty
+            
+        Examples:
+            # Single resource type
+            result = await client.get_resources(["assets"], folder_id=100)
+            
+            # Multiple resource types (fetched concurrently)
+            result = await client.get_resources(
+                ["assets", "queues", "processes"], 
+                folder_id=100
+            )
+        """
+        import asyncio
+        
+        # Map resource types to existing tested methods
+        VALID_RESOURCE_TYPES = {
+            "assets": self.get_assets,
+            "queues": self.get_queues,
+            "processes": self.get_processes,
+            "triggers": self.get_triggers,
+            "storage_buckets": self.get_storage_buckets
+        }
+        
+        # Validate resource types
+        invalid_types = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
+        if invalid_types:
+            raise ValueError(
+                f"Invalid resource_types: {invalid_types}. "
+                f"Valid options: {list(VALID_RESOURCE_TYPES.keys())}"
+            )
+        
+        if not resource_types:
+            raise ValueError("resource_types cannot be empty")
+        
+        # Build tasks for concurrent fetching using existing methods
+        tasks = {
+            resource_type: VALID_RESOURCE_TYPES[resource_type](folder_id)
+            for resource_type in resource_types
+        }
+        
+        # Execute all fetches concurrently
+        results = dict(zip(
+            tasks.keys(),
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+        ))
+        
+        # Build response with graceful error handling
+        response = {"resources": {}}
+        
+        for resource_type, result in results.items():
+            if isinstance(result, Exception):
+                # If a specific resource type fails, include error but continue
+                response["resources"][resource_type] = {
+                    "error": str(result),
+                    "count": 0,
+                    "items": []
+                }
+            else:
+                # Extract items from OData response
+                # Most Orchestrator endpoints return {"value": [...], "@odata.count": ...}
+                if isinstance(result, dict) and "value" in result:
+                    items = result["value"]
+                elif isinstance(result, list):
+                    items = result
+                else:
+                    items = []
+                
+                response["resources"][resource_type] = {
+                    "count": len(items),
+                    "items": items
+                }
+        
+        return response
 
     # -------------------------------------------------------------------------
     # NuGet helpers

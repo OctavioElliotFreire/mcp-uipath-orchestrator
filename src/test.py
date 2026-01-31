@@ -21,6 +21,9 @@ def get_all_account_tenant_pairs():
 # TEST 1: Authentication (shared token)
 # -----------------------------------------------------------------------------
 
+
+
+
 async def test_connection():
     """Test 1: Connection and Authentication (Shared Token)"""
     print("\n" + "=" * 60)
@@ -65,6 +68,7 @@ async def test_connection():
 # TEST 2: Get folders (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
 
+
 async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
     print("TEST 2: Get Folders (Multi-Account, Multi-Tenant)")
@@ -105,9 +109,81 @@ async def test_get_folders_multi_tenant():
     return True
 
 
+
+# test_get_resources.py
+
+async def test_get_resources_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST: Get Resources (Multi-Account, Multi-Tenant)")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    for account, tenant in pairs:
+        key = f"{account}/{tenant}"
+        print(f"\n▶ Account/Tenant: {key}")
+        client = OrchestratorClient(account=account, tenant=tenant)
+
+        try:
+            await client.authenticate()
+
+            folders = await client.get_folders()
+            if not folders.get("value"):
+                print(f"⚠ {key}: No folders found")
+                continue
+
+            folder = folders["value"][0]
+            folder_id = folder["Id"]
+            folder_name = folder.get("DisplayName")
+
+            print(f"• Using folder: {folder_name} (Id={folder_id})")
+
+            # Single resource
+            resources = ["assets"]
+            print(f"\n• Fetching resources: {resources}")
+            result = await client.get_resources(resources, folder_id=folder_id)
+
+            asset_count = len(result.get("assets", []))
+            print(f"✓ {key}: {asset_count} assets")
+
+            if asset_count > 0:
+                sample = result["assets"][0]
+                print(
+                    f"  Sample asset: {sample.get('Name')} "
+                    f"({sample.get('ValueType')})"
+                )
+
+            # Multiple resources
+            resources = ["assets", "queues", "processes"]
+            print(f"\n• Fetching resources: {resources}")
+            result = await client.get_resources(resources, folder_id=folder_id)
+
+            for resource, values in result.items():
+                count = len(values)
+                print(f"✓ {key}: {count} {resource}")
+
+                if count > 0:
+                    sample = values[0]
+                    name = sample.get("Name") or sample.get("DisplayName")
+                    print(f"  Sample {resource[:-1]}: {name}")
+
+        except Exception as e:
+            print(f"✗ {key}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+
+
+
 # -----------------------------------------------------------------------------
 # TEST 3: Get assets (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
+
 
 async def test_get_assets_multi_tenant():
     print("\n" + "=" * 60)
@@ -457,11 +533,12 @@ async def test_download_library_version():
 if __name__ == "__main__":
     # Uncomment ONE test at a time:
 
-    #result = asyncio.run(test_connection())
+   # result = asyncio.run(test_connection())
     #result = asyncio.run(test_get_folders_multi_tenant())
     #result = asyncio.run(test_get_assets_multi_tenant())
     #result = asyncio.run(test_get_queues_multi_tenant())
     #result = asyncio.run(test_get_triggers_multi_tenant())
     #result = asyncio.run(test_get_processes_multi_tenant())
     #result = asyncio.run(test_list_library_versions_flow())
-    result = asyncio.run(test_download_library_version())
+    #result = asyncio.run(test_download_library_version())
+    result = asyncio.run(test_get_resources_multi_tenant())
