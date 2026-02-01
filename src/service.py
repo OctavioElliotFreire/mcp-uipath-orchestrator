@@ -3,7 +3,7 @@ import json
 import httpx
 from pathlib import Path
 from typing import TypedDict
-
+import asyncio
 # -----------------------------------------------------------------------------
 # Configuration Types
 # -----------------------------------------------------------------------------
@@ -266,8 +266,8 @@ class OrchestratorClient:
             Dictionary with structure:
             {
                 "resources": {
-                    "assets": {"count": int, "items": list},
-                    "queues": {"count": int, "items": list},
+                    "assets": {"items": list},
+                    "queues": {"items": list},
                     ...
                 }
             }
@@ -285,7 +285,7 @@ class OrchestratorClient:
                 folder_id=100
             )
         """
-        import asyncio
+        
         
         # Map resource types to existing tested methods
         VALID_RESOURCE_TYPES = {
@@ -324,15 +324,11 @@ class OrchestratorClient:
         
         for resource_type, result in results.items():
             if isinstance(result, Exception):
-                # If a specific resource type fails, include error but continue
                 response["resources"][resource_type] = {
-                    "error": str(result),
-                    "count": 0,
-                    "items": []
+                    "error": str(result)
                 }
             else:
                 # Extract items from OData response
-                # Most Orchestrator endpoints return {"value": [...], "@odata.count": ...}
                 if isinstance(result, dict) and "value" in result:
                     items = result["value"]
                 elif isinstance(result, list):
@@ -341,12 +337,10 @@ class OrchestratorClient:
                     items = []
                 
                 response["resources"][resource_type] = {
-                    "count": len(items),
                     "items": items
                 }
-        
-        return response
 
+        return response
     # -------------------------------------------------------------------------
     # NuGet helpers
     # -------------------------------------------------------------------------

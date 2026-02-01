@@ -112,71 +112,76 @@ async def test_get_folders_multi_tenant():
 
 # test_get_resources.py
 
-async def test_get_resources_multi_tenant():
+async def test_get_resources():
+    """Simple test for the new get_resources() method"""
     print("\n" + "=" * 60)
-    print("TEST: Get Resources (Multi-Account, Multi-Tenant)")
+    print("TEST: get_resources() method")
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
-        print(f"\n▶ Account/Tenant: {key}")
+        print(f"\n▶ Testing: {key}")
+        
         client = OrchestratorClient(account=account, tenant=tenant)
 
         try:
             await client.authenticate()
-
+            
+            # Get all folders
             folders = await client.get_folders()
-            if not folders.get("value"):
-                print(f"⚠ {key}: No folders found")
+            folder_list = folders.get("value", [])
+            
+            if not folder_list:
+                print(f"  ⚠ No folders, skipping")
                 continue
-
-            folder = folders["value"][0]
-            folder_id = folder["Id"]
-            folder_name = folder.get("DisplayName")
-
-            print(f"• Using folder: {folder_name} (Id={folder_id})")
-
-            # Single resource
-            resources = ["assets"]
-            print(f"\n• Fetching resources: {resources}")
-            result = await client.get_resources(resources, folder_id=folder_id)
-
-            asset_count = len(result.get("assets", []))
-            print(f"✓ {key}: {asset_count} assets")
-
-            if asset_count > 0:
-                sample = result["assets"][0]
-                print(
-                    f"  Sample asset: {sample.get('Name')} "
-                    f"({sample.get('ValueType')})"
+            
+            print(f"  Found {len(folder_list)} folder(s)")
+            
+            # Test each folder (limit to first 10)
+            for folder in folder_list[:10]:
+                folder_id = folder.get("Id")
+                folder_name = folder.get("DisplayName", "Unknown")
+                print(f"\n  📁 {folder_name} (ID: {folder_id})")
+                
+                # Test: Get multiple resource types
+                result = await client.get_resources(
+                    resource_types=["assets", "queues", "triggers", "processes"],
+                    folder_id=folder_id
                 )
-
-            # Multiple resources
-            resources = ["assets", "queues", "processes"]
-            print(f"\n• Fetching resources: {resources}")
-            result = await client.get_resources(resources, folder_id=folder_id)
-
-            for resource, values in result.items():
-                count = len(values)
-                print(f"✓ {key}: {count} {resource}")
-
-                if count > 0:
-                    sample = values[0]
-                    name = sample.get("Name") or sample.get("DisplayName")
-                    print(f"  Sample {resource[:-1]}: {name}")
+                
+                # Display results with better formatting
+                for resource_type in ["assets", "queues", "processes", "triggers"]:
+                    resource_data = result["resources"][resource_type]
+                    
+                    if "error" in resource_data:
+                        print(f"     ✗ {resource_type}: ERROR - {resource_data['error']}")
+                    else:
+                        items = resource_data["items"]
+                        count = len(items)
+                        print(f"     ✓ {resource_type}: {count}")
+                        
+                        # Show first 3 items with names
+                        if count > 0:
+                            for item in items[:3]:
+                                name = item.get("Name") or item.get("ProcessKey") or item.get("Id", "Unknown")
+                                print(f"       - {name}")
+                            
+                            if count > 3:
+                                print(f"       ... and {count - 3} more")
 
         except Exception as e:
-            print(f"✗ {key}: {e}")
+            print(f"  ✗ Error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
         finally:
             await client.close()
 
+    print("\n✅ Test completed successfully")
     return True
-
-
 
 
 
@@ -541,4 +546,4 @@ if __name__ == "__main__":
     #result = asyncio.run(test_get_processes_multi_tenant())
     #result = asyncio.run(test_list_library_versions_flow())
     #result = asyncio.run(test_download_library_version())
-    result = asyncio.run(test_get_resources_multi_tenant())
+    result = asyncio.run(test_get_resources())
