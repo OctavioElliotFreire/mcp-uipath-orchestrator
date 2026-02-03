@@ -238,109 +238,107 @@ class OrchestratorClient:
     # Consolidated resource fetching
     # -------------------------------------------------------------------------
 
-    async def get_resources(
-        self,
-        resource_types: list[str],
-        folder_id: int
-    ) -> dict:
+    async def get_resources(self,resource_types: list[str],folder_id: int) -> dict:
         """
-        Get specified resource types from a folder with concurrent execution.
-        
+        Get specified UiPath Orchestrator resource types from a folder with
+        concurrent execution.
+
         This method orchestrates calls to existing tested methods:
         - get_assets()
         - get_queues()
         - get_processes()
         - get_triggers()
         - get_storage_buckets()
-        
+
         Args:
             resource_types: List of resource types to fetch. Valid options:
-                - "assets": Configuration assets (get_assets)
-                - "queues": Work queues (get_queues)
-                - "processes": Process releases (get_processes)
-                - "triggers": Automation triggers (get_triggers)
-                - "storage_buckets": Storage buckets (get_storage_buckets)
+                - "assets": Configuration assets
+                - "queues": Work queues
+                - "processes": Process releases
+                - "triggers": Automation triggers
+                - "storage_buckets": Storage buckets
             folder_id: Folder ID
-            
+
         Returns:
-            Dictionary with structure:
+            A dictionary mapping each requested resource type to either:
+            - a list (success, possibly empty)
+            - a dict with an "error" key (failure)
+
+            Example:
             {
-                "resources": {
-                    "assets": {"items": list},
-                    "queues": {"items": list},
-                    ...
-                }
+                "assets": [...],
+                "queues": [...],
+                "triggers": { "error": "403 Forbidden" }
             }
-            
+
+            NOTE:
+            This shape is intentional and optimized for LLM consumers:
+            - list  -> success
+            - dict with "error" -> failure
+            The type itself signals the outcome, avoiding redundant wrappers
+            like {"items": [...], "error": null} and reducing token usage.
+
         Raises:
             ValueError: If resource_types is invalid or empty
-            
-        Examples:
-            # Single resource type
-            result = await client.get_resources(["assets"], folder_id=100)
-            
-            # Multiple resource types (fetched concurrently)
-            result = await client.get_resources(
-                ["assets", "queues", "processes"], 
-                folder_id=100
-            )
         """
-        
-        
+
         # Map resource types to existing tested methods
         VALID_RESOURCE_TYPES = {
             "assets": self.get_assets,
             "queues": self.get_queues,
             "processes": self.get_processes,
             "triggers": self.get_triggers,
-            "storage_buckets": self.get_storage_buckets
+            "storage_buckets": self.get_storage_buckets,
         }
-        
+
         # Validate resource types
+        if not resource_types:
+            raise ValueError("resource_types cannot be empty")
+
         invalid_types = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
         if invalid_types:
             raise ValueError(
                 f"Invalid resource_types: {invalid_types}. "
                 f"Valid options: {list(VALID_RESOURCE_TYPES.keys())}"
             )
-        
-        if not resource_types:
-            raise ValueError("resource_types cannot be empty")
-        
-        # Build tasks for concurrent fetching using existing methods
+
+        # Build tasks for concurrent fetching
         tasks = {
             resource_type: VALID_RESOURCE_TYPES[resource_type](folder_id)
             for resource_type in resource_types
         }
-        
-        # Execute all fetches concurrently
-        results = dict(zip(
-            tasks.keys(),
-            await asyncio.gather(*tasks.values(), return_exceptions=True)
-        ))
-        
-        # Build response with graceful error handling
-        response = {"resources": {}}
-        
-        for resource_type, result in results.items():
+
+        # Execute all fetches concurrently; exceptions are captured as results
+        results = await asyncio.gather(
+            *tasks.values(),
+            return_exceptions=True
+        )
+
+        # Build response using shape-based signaling:
+        #   - list  => success
+        #   - dict with "error" => failure
+        response: dict[str, list | dict] = {}
+
+        for resource_type, result in zip(tasks.keys(), results):
+            # Failure: localize error to the specific resource type
             if isinstance(result, Exception):
-                response["resources"][resource_type] = {
+                response[resource_type] = {
                     "error": str(result)
                 }
+                continue
+
+            # Success: always normalize to a list
+            # Strip metadata and keep only what the LLM needs
+            if isinstance(result, dict) and "value" in result:
+                response[resource_type] = result["value"]
+            elif isinstance(result, list):
+                response[resource_type] = result
             else:
-                # Extract items from OData response
-                if isinstance(result, dict) and "value" in result:
-                    items = result["value"]
-                elif isinstance(result, list):
-                    items = result
-                else:
-                    items = []
-                
-                response["resources"][resource_type] = {
-                    "items": items
-                }
+                # Defensive fallback: success with no items
+                response[resource_type] = []
 
         return response
+
     # -------------------------------------------------------------------------
     # NuGet helpers
     # -------------------------------------------------------------------------
