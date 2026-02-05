@@ -3,7 +3,7 @@ import json
 import httpx
 from pathlib import Path
 from typing import TypedDict
-
+import asyncio
 # -----------------------------------------------------------------------------
 # Configuration Types
 # -----------------------------------------------------------------------------
@@ -28,15 +28,11 @@ class Config(TypedDict):
 # Global configuration
 # -----------------------------------------------------------------------------
 
-
-
 def load_config() -> Config:
     """Load multi-orchestrator configuration from config.json"""
     # service.py is in src/, so we need parent.parent to get to project root
     project_root = Path(__file__).resolve().parent.parent  # ← Add second .parent
     config_path = project_root / "config" / "config.json"
-    
-    # ... rest stays the same
     
     if not config_path.exists():
         raise RuntimeError(f"Configuration file not found: {config_path}")
@@ -101,8 +97,6 @@ class OrchestratorClient:
     - Supports multiple accounts and tenants per account
     - Each instance maintains its own authentication token
     """
-
-    # DO NOT add _access_token here as a class variable!
 
     def __init__(self, account: str, tenant: str):
         """
@@ -239,6 +233,111 @@ class OrchestratorClient:
             for lib in data.get("value", [])
             if lib.get("Id")
         )
+
+    # -------------------------------------------------------------------------
+    # Consolidated resource fetching
+    # -------------------------------------------------------------------------
+
+    async def get_resources(self,resource_types: list[str],folder_id: int) -> dict:
+        """
+        Get specified UiPath Orchestrator resource types from a folder with
+        concurrent execution.
+
+        This method orchestrates calls to existing tested methods:
+        - get_assets()
+        - get_queues()
+        - get_processes()
+        - get_triggers()
+        - get_storage_buckets()
+
+        Args:
+            resource_types: List of resource types to fetch. Valid options:
+                - "assets": Configuration assets
+                - "queues": Work queues
+                - "processes": Process releases
+                - "triggers": Automation triggers
+                - "storage_buckets": Storage buckets
+            folder_id: Folder ID
+
+        Returns:
+            A dictionary mapping each requested resource type to either:
+            - a list (success, possibly empty)
+            - a dict with an "error" key (failure)
+
+            Example:
+            {
+                "assets": [...],
+                "queues": [...],
+                "triggers": { "error": "403 Forbidden" }
+            }
+
+            NOTE:
+            This shape is intentional and optimized for LLM consumers:
+            - list  -> success
+            - dict with "error" -> failure
+            The type itself signals the outcome, avoiding redundant wrappers
+            like {"items": [...], "error": null} and reducing token usage.
+
+        Raises:
+            ValueError: If resource_types is invalid or empty
+        """
+
+        # Map resource types to existing tested methods
+        VALID_RESOURCE_TYPES = {
+            "assets": self.get_assets,
+            "queues": self.get_queues,
+            "processes": self.get_processes,
+            "triggers": self.get_triggers,
+            "storage_buckets": self.get_storage_buckets,
+        }
+
+        # Validate resource types
+        if not resource_types:
+            raise ValueError("resource_types cannot be empty")
+
+        invalid_types = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
+        if invalid_types:
+            raise ValueError(
+                f"Invalid resource_types: {invalid_types}. "
+                f"Valid options: {list(VALID_RESOURCE_TYPES.keys())}"
+            )
+
+        # Build tasks for concurrent fetching
+        tasks = {
+            resource_type: VALID_RESOURCE_TYPES[resource_type](folder_id)
+            for resource_type in resource_types
+        }
+
+        # Execute all fetches concurrently; exceptions are captured as results
+        results = await asyncio.gather(
+            *tasks.values(),
+            return_exceptions=True
+        )
+
+        # Build response using shape-based signaling:
+        #   - list  => success
+        #   - dict with "error" => failure
+        response: dict[str, list | dict] = {}
+
+        for resource_type, result in zip(tasks.keys(), results):
+            # Failure: localize error to the specific resource type
+            if isinstance(result, Exception):
+                response[resource_type] = {
+                    "error": str(result)
+                }
+                continue
+
+            # Success: always normalize to a list
+            # Strip metadata and keep only what the LLM needs
+            if isinstance(result, dict) and "value" in result:
+                response[resource_type] = result["value"]
+            elif isinstance(result, list):
+                response[resource_type] = result
+            else:
+                # Defensive fallback: success with no items
+                response[resource_type] = []
+
+        return response
 
     # -------------------------------------------------------------------------
     # NuGet helpers
