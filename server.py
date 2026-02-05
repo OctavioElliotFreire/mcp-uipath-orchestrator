@@ -147,14 +147,31 @@ async def list_library_versions(account: str, tenant: str, package_id: str) -> l
 
 
 @mcp.tool()
-async def download_library_version(
-    account: str,
-    tenant: str,
-    package_id: str,
-    version: str
-) -> str:
+async def download_library_version(account: str,tenant: str,package_id: str,version: str) -> str:
     """
-    Download a specific version of a UiPath library (.nupkg).
+    Download a specific version of a UiPath library (.nupkg)
+    using the configured download directory.
+
+    Args:
+        account: UiPath account logical name
+        tenant: UiPath tenant name
+        package_id: Library package ID
+        version: Version string (e.g., "1.0.5")
+
+    Returns:
+        The local file path where the library was downloaded
     """
     client = await get_client(account, tenant)
-    path = await clien
+    path = await client.download_library_version(
+        package_id=package_id,
+        version=version
+    )
+    return str(path)
+
+
+# -----------------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
