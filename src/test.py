@@ -21,6 +21,9 @@ def get_all_account_tenant_pairs():
 # TEST 1: Authentication (shared token)
 # -----------------------------------------------------------------------------
 
+
+
+
 async def test_connection():
     """Test 1: Connection and Authentication (Shared Token)"""
     print("\n" + "=" * 60)
@@ -65,6 +68,7 @@ async def test_connection():
 # TEST 2: Get folders (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
 
+
 async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
     print("TEST 2: Get Folders (Multi-Account, Multi-Tenant)")
@@ -105,9 +109,13 @@ async def test_get_folders_multi_tenant():
     return True
 
 
+
+
+
 # -----------------------------------------------------------------------------
 # TEST 3: Get assets (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
+
 
 async def test_get_assets_multi_tenant():
     print("\n" + "=" * 60)
@@ -449,6 +457,88 @@ async def test_download_library_version():
     # Return True only if all tests passed (no failures)
     return failed == 0
 
+# -----------------------------------------------------------------------------
+# TEST 1: test_get_resources (multi-account, multi-tenant)
+# -----------------------------------------------------------------------------
+
+async def test_get_resources():
+    """Simple test for the new get_resources() method"""
+    print("\n" + "=" * 60)
+    print("TEST: get_resources() method")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    for account, tenant in pairs:
+        key = f"{account}/{tenant}"
+        print(f"\n▶ Testing: {key}")
+
+        client = OrchestratorClient(account=account, tenant=tenant)
+
+        try:
+            await client.authenticate()
+
+            # Get all folders
+            folders = await client.get_folders()
+            folder_list = folders.get("value", [])
+
+            if not folder_list:
+                print(f"  ⚠ No folders, skipping")
+                continue
+
+            print(f"  Found {len(folder_list)} folder(s)")
+
+            # Test each folder (limit to first 10)
+            for folder in folder_list[:10]:
+                folder_id = folder.get("Id")
+                folder_name = folder.get("DisplayName", "Unknown")
+                print(f"\n  📁 {folder_name} (ID: {folder_id})")
+
+                # Test: Get multiple resource types
+                result = await client.get_resources(
+                    resource_types=["assets", "queues", "processes", "triggers"],
+                    folder_id=folder_id
+                )
+
+                # Display results using shape-based signaling
+                for resource_type in ["assets", "queues", "processes", "triggers"]:
+                    resource_data = result.get(resource_type)
+
+                    if isinstance(resource_data, dict) and "error" in resource_data:
+                        print(f"     ✗ {resource_type}: ERROR - {resource_data['error']}")
+                        continue
+
+                    if isinstance(resource_data, list):
+                        count = len(resource_data)
+                        print(f"     ✓ {resource_type}: {count}")
+
+                        # Show first 3 items with names
+                        for item in resource_data[:3]:
+                            name = (
+                                item.get("Name")
+                                or item.get("ProcessKey")
+                                or item.get("Id", "Unknown")
+                            )
+                            print(f"       - {name}")
+
+                        if count > 3:
+                            print(f"       ... and {count - 3} more")
+                    else:
+                        # Defensive guard: should never happen
+                        print(f"     ⚠ {resource_type}: Unexpected response shape")
+
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        finally:
+            await client.close()
+
+    print("\n✅ Test completed successfully")
+    return True
+
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -457,11 +547,12 @@ async def test_download_library_version():
 if __name__ == "__main__":
     # Uncomment ONE test at a time:
 
-    #result = asyncio.run(test_connection())
+   # result = asyncio.run(test_connection())
     #result = asyncio.run(test_get_folders_multi_tenant())
     #result = asyncio.run(test_get_assets_multi_tenant())
     #result = asyncio.run(test_get_queues_multi_tenant())
     #result = asyncio.run(test_get_triggers_multi_tenant())
     #result = asyncio.run(test_get_processes_multi_tenant())
     #result = asyncio.run(test_list_library_versions_flow())
-    result = asyncio.run(test_download_library_version())
+    #result = asyncio.run(test_download_library_version())
+    result = asyncio.run(test_get_resources())
