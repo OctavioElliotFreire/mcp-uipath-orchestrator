@@ -4,6 +4,7 @@ import httpx
 from pathlib import Path
 from typing import TypedDict
 import asyncio
+
 # -----------------------------------------------------------------------------
 # Configuration Types
 # -----------------------------------------------------------------------------
@@ -12,8 +13,10 @@ class AuthConfig(TypedDict):
     client_id: str
     client_secret: str
 
+
 class TenantConfig(TypedDict):
     libraries_feed_id: str
+
 
 class AccountConfig(TypedDict):
     base_url: str
@@ -21,8 +24,10 @@ class AccountConfig(TypedDict):
     download_dir: str
     tenants: dict[str, TenantConfig]
 
+
 class Config(TypedDict):
     accounts: dict[str, AccountConfig]
+
 
 # -----------------------------------------------------------------------------
 # Global configuration
@@ -30,74 +35,32 @@ class Config(TypedDict):
 
 def load_config() -> Config:
     """Load multi-orchestrator configuration from config.json"""
-    # service.py is in src/, so we need parent.parent to get to project root
-    project_root = Path(__file__).resolve().parent.parent  # ← Add second .parent
+    project_root = Path(__file__).resolve().parent.parent
     config_path = project_root / "config" / "config.json"
-    
+
     if not config_path.exists():
         raise RuntimeError(f"Configuration file not found: {config_path}")
-    
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Invalid JSON in config file: {e}")
-    
-    # Validate structure
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
     if not isinstance(data, dict):
         raise RuntimeError("Config must be a JSON object")
-    
-    for account_name, account_config in data.items():
-        required_fields = ["base_url", "auth", "download_dir", "tenants"]
-        for field in required_fields:
-            if field not in account_config:
-                raise RuntimeError(
-                    f"Account '{account_name}' missing required field '{field}'"
-                )
-        
-        # Validate auth
-        if "client_id" not in account_config["auth"]:
-            raise RuntimeError(
-                f"Account '{account_name}' missing 'client_id' in auth"
-            )
-        if "client_secret" not in account_config["auth"]:
-            raise RuntimeError(
-                f"Account '{account_name}' missing 'client_secret' in auth"
-            )
-        
-        # Validate tenants
-        if not account_config["tenants"]:
-            raise RuntimeError(
-                f"Account '{account_name}' has no tenants configured"
-            )
-        
-        for tenant_name, tenant_config in account_config["tenants"].items():
-            if "libraries_feed_id" not in tenant_config:
-                raise RuntimeError(
-                    f"Tenant '{tenant_name}' in account '{account_name}' "
-                    f"missing 'libraries_feed_id'"
-                )
-    
+
     return {"accounts": data}
 
-# Load configuration at module level
+
 CONFIG = load_config()
 
+
 def get_available_accounts(config: dict) -> list[str]:
-    """
-    Get list of configured UiPath Orchestrator account names.
-    """
     return list(config["accounts"].keys())
 
 
 def get_available_tenants(config: dict, account: str) -> list[str]:
-    """
-    Get list of configured tenants for an account.
-    """
     account_cfg = config["accounts"].get(account)
     if not account_cfg:
         return []
-
     return list(account_cfg.get("tenants", {}).keys())
 
 
@@ -107,52 +70,32 @@ def get_available_tenants(config: dict, account: str) -> list[str]:
 
 class OrchestratorClient:
     """
-    UiPath Orchestrator client (multi-tenant, multi-account).
+    UiPath Orchestrator client (multi-account, multi-tenant).
 
-    - Reads configuration from CONFIG (loaded from config.json)
-    - OAuth (Secure Deployment) only
-    - Supports multiple accounts and tenants per account
-    - Each instance maintains its own authentication token
+    - OAuth (client credentials)
+    - Normalizes OData responses
+    - Returns clean domain objects
     """
 
     def __init__(self, account: str, tenant: str):
-        """
-        Initialize Orchestrator client for a specific account and tenant.
-        
-        Args:
-            account: Account logical name (e.g., "billiysusldx")
-            tenant: Tenant name within the account (e.g., "DEV", "PROD")
-        """
-        # Validate account exists
         if account not in CONFIG["accounts"]:
-            available = list(CONFIG["accounts"].keys())
-            raise RuntimeError(
-                f"Account '{account}' not found in config. "
-                f"Available accounts: {available}"
-            )
-        
-        account_config = CONFIG["accounts"][account]
-        
-        # Validate tenant exists in account
-        if tenant not in account_config["tenants"]:
-            available = list(account_config["tenants"].keys())
-            raise RuntimeError(
-                f"Tenant '{tenant}' not found in account '{account}'. "
-                f"Available tenants: {available}"
-            )
-        
-        # Store configuration
+            raise RuntimeError(f"Account '{account}' not found")
+
+        account_cfg = CONFIG["accounts"][account]
+
+        if tenant not in account_cfg["tenants"]:
+            raise RuntimeError(f"Tenant '{tenant}' not found in account '{account}'")
+
         self.account = account
         self.tenant = tenant
-        self.base_url = account_config["base_url"]
-        self.download_dir = account_config["download_dir"]
-        self.client_id = account_config["auth"]["client_id"]
-        self.client_secret = account_config["auth"]["client_secret"]
-        self.libraries_feed_id = account_config["tenants"][tenant]["libraries_feed_id"]
-        
-        # Instance-level token (CRITICAL: each instance gets its own token)
+        self.base_url = account_cfg["base_url"]
+        self.download_dir = account_cfg["download_dir"]
+        self.client_id = account_cfg["auth"]["client_id"]
+        self.client_secret = account_cfg["auth"]["client_secret"]
+        self.libraries_feed_id = account_cfg["tenants"][tenant]["libraries_feed_id"]
+
         self._access_token: str | None = None
-        
+
         self.client = httpx.AsyncClient(
             timeout=30.0,
             follow_redirects=False,
@@ -168,13 +111,14 @@ class OrchestratorClient:
 
         auth_url = f"{self.base_url}identity_/connect/token"
 
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-        }
-
-        r = await self.client.post(auth_url, data=data)
+        r = await self.client.post(
+            auth_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
+        )
         r.raise_for_status()
 
         self._access_token = r.json()["access_token"]
@@ -184,7 +128,7 @@ class OrchestratorClient:
     # Headers
     # -------------------------------------------------------------------------
 
-    def _orchestrator_headers(self, folder_id: int | None = None) -> dict:
+    def _headers(self, folder_id: int | None = None) -> dict:
         if not self._access_token:
             raise RuntimeError("Client not authenticated")
 
@@ -196,16 +140,14 @@ class OrchestratorClient:
 
         if folder_id is not None:
             headers["X-UIPATH-OrganizationUnitId"] = str(folder_id)
-        else:
-            headers["X-UIPATH-OrganizationUnitId"] = self.account
 
         return headers
 
     # -------------------------------------------------------------------------
-    # REST helpers
+    # REST helpers (transport layer)
     # -------------------------------------------------------------------------
 
-    async def get(self, endpoint: str, folder_id: int | None = None):
+    async def get(self, endpoint: str, folder_id: int | None = None) -> dict:
         if not self._access_token:
             await self.authenticate()
 
@@ -214,92 +156,64 @@ class OrchestratorClient:
             f"{self.tenant}/{endpoint}"
         )
 
-        r = await self.client.get(
-            url,
-            headers=self._orchestrator_headers(folder_id),
-        )
+        r = await self.client.get(url, headers=self._headers(folder_id))
         r.raise_for_status()
         return r.json()
 
     # -------------------------------------------------------------------------
-    # Domain methods (Orchestrator)
+    # OData normalization
     # -------------------------------------------------------------------------
 
-    async def get_folders(self):
-        return await self.get("odata/Folders")
+    @staticmethod
+    def _unwrap_odata(response):
+        """
+        Normalize UiPath OData responses.
+        - If response has a 'value' key, return it
+        - Otherwise return response unchanged
+        """
+        if isinstance(response, dict) and "value" in response:
+            return response["value"]
+        return response
 
-    async def get_assets(self, folder_id: int):
-        return await self.get("odata/Assets", folder_id)
+    # -------------------------------------------------------------------------
+    # Domain methods (collections return lists)
+    # -------------------------------------------------------------------------
 
-    async def get_queues(self, folder_id: int):
-        return await self.get("odata/QueueDefinitions", folder_id)
+    async def get_folders(self) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/Folders"))
 
-    async def get_triggers(self, folder_id: int):
-        return await self.get("odata/ProcessSchedules", folder_id)
+    async def get_assets(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/Assets", folder_id))
 
-    async def get_processes(self, folder_id: int):
-        return await self.get("odata/Releases", folder_id)
+    async def get_queues(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
 
-    async def get_storage_buckets(self, folder_id: int):
-        return await self.get("odata/BucketDefinitions", folder_id)
+    async def get_triggers(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
+
+    async def get_processes(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/Releases", folder_id))
+
+    async def get_storage_buckets(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/BucketDefinitions", folder_id))
 
     async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
         return sorted(
             lib["Id"]
-            for lib in data.get("value", [])
+            for lib in self._unwrap_odata(data)
             if lib.get("Id")
         )
 
     # -------------------------------------------------------------------------
-    # Consolidated resource fetching
+    # Consolidated folder-scoped resource fetch
     # -------------------------------------------------------------------------
 
-    async def get_resources(self,resource_types: list[str],folder_id: int) -> dict:
-        """
-        Get specified UiPath Orchestrator resource types from a folder with
-        concurrent execution.
-
-        This method orchestrates calls to existing tested methods:
-        - get_assets()
-        - get_queues()
-        - get_processes()
-        - get_triggers()
-        - get_storage_buckets()
-
-        Args:
-            resource_types: List of resource types to fetch. Valid options:
-                - "assets": Configuration assets
-                - "queues": Work queues
-                - "processes": Process releases
-                - "triggers": Automation triggers
-                - "storage_buckets": Storage buckets
-            folder_id: Folder ID
-
-        Returns:
-            A dictionary mapping each requested resource type to either:
-            - a list (success, possibly empty)
-            - a dict with an "error" key (failure)
-
-            Example:
-            {
-                "assets": [...],
-                "queues": [...],
-                "triggers": { "error": "403 Forbidden" }
-            }
-
-            NOTE:
-            This shape is intentional and optimized for LLM consumers:
-            - list  -> success
-            - dict with "error" -> failure
-            The type itself signals the outcome, avoiding redundant wrappers
-            like {"items": [...], "error": null} and reducing token usage.
-
-        Raises:
-            ValueError: If resource_types is invalid or empty
-        """
-
-        # Map resource types to existing tested methods
+    async def get_resources(
+        self,
+        resource_types: list[str],
+        folder_id: int,
+    ) -> dict[str, list | dict]:
         VALID_RESOURCE_TYPES = {
             "assets": self.get_assets,
             "queues": self.get_queues,
@@ -308,51 +222,27 @@ class OrchestratorClient:
             "storage_buckets": self.get_storage_buckets,
         }
 
-        # Validate resource types
         if not resource_types:
             raise ValueError("resource_types cannot be empty")
 
-        invalid_types = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
-        if invalid_types:
-            raise ValueError(
-                f"Invalid resource_types: {invalid_types}. "
-                f"Valid options: {list(VALID_RESOURCE_TYPES.keys())}"
-            )
+        invalid = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
+        if invalid:
+            raise ValueError(f"Invalid resource_types: {invalid}")
 
-        # Build tasks for concurrent fetching
         tasks = {
-            resource_type: VALID_RESOURCE_TYPES[resource_type](folder_id)
-            for resource_type in resource_types
+            rt: VALID_RESOURCE_TYPES[rt](folder_id)
+            for rt in resource_types
         }
 
-        # Execute all fetches concurrently; exceptions are captured as results
-        results = await asyncio.gather(
-            *tasks.values(),
-            return_exceptions=True
-        )
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
-        # Build response using shape-based signaling:
-        #   - list  => success
-        #   - dict with "error" => failure
         response: dict[str, list | dict] = {}
 
         for resource_type, result in zip(tasks.keys(), results):
-            # Failure: localize error to the specific resource type
             if isinstance(result, Exception):
-                response[resource_type] = {
-                    "error": str(result)
-                }
-                continue
-
-            # Success: always normalize to a list
-            # Strip metadata and keep only what the LLM needs
-            if isinstance(result, dict) and "value" in result:
-                response[resource_type] = result["value"]
-            elif isinstance(result, list):
-                response[resource_type] = result
+                response[resource_type] = {"error": str(result)}
             else:
-                # Defensive fallback: success with no items
-                response[resource_type] = []
+                response[resource_type] = result or []
 
         return response
 
@@ -369,53 +259,30 @@ class OrchestratorClient:
             f"/orchestrator_/nuget/v3/{self.libraries_feed_id}/index.json"
         )
 
-        headers = {
-            "Authorization": f"Bearer {self._access_token}",
-            "Accept": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {self._access_token}"}
 
-        # 1) NuGet service index
-        r = await self.client.get(index_url, headers=headers)
-        r.raise_for_status()
-        index = r.json()
+        index = (await self.client.get(index_url, headers=headers)).json()
 
-        # 2) Find PackageBaseAddress
-        base_addr = None
-        for res in index.get("resources", []):
-            t = res.get("@type")
-            if t == "PackageBaseAddress/3.0.0" or (
-                isinstance(t, list) and "PackageBaseAddress/3.0.0" in t
-            ):
-                base_addr = res["@id"]
-                break
+        base_addr = next(
+            (
+                r["@id"]
+                for r in index.get("resources", [])
+                if "PackageBaseAddress/3.0.0" in (
+                    r.get("@type", []) if isinstance(r.get("@type"), list) else [r.get("@type")]
+                )
+            ),
+            None,
+        )
 
         if not base_addr:
             raise RuntimeError("PackageBaseAddress/3.0.0 not found")
 
-        # 3) Fetch versions
-        pkg = package_id.lower()
-        versions_url = f"{base_addr.rstrip('/')}/{pkg}/index.json"
-
-        vr = await self.client.get(versions_url, headers=headers)
-        vr.raise_for_status()
-
-        versions = vr.json().get("versions", [])
-        if not versions:
-            raise RuntimeError(f"No versions found for '{package_id}'")
+        versions_url = f"{base_addr.rstrip('/')}/{package_id.lower()}/index.json"
+        versions = (await self.client.get(versions_url, headers=headers)).json().get("versions", [])
 
         return sorted(versions)
 
-    async def download_library_version(
-        self,
-        package_id: str,
-        version: str
-    ) -> Path:
-        """
-        Download a specific version of a UiPath library (.nupkg)
-        from the tenant-scoped Orchestrator NuGet feed.
-
-        Returns the path to the downloaded file.
-        """
+    async def download_library_version(self, package_id: str, version: str) -> Path:
         if not self._access_token:
             await self.authenticate()
 
@@ -429,41 +296,48 @@ class OrchestratorClient:
             "Accept": "application/json",
         }
 
-        # 1) Fetch NuGet service index
+        # 1) Get NuGet service index
         r = await self.client.get(index_url, headers=headers)
         r.raise_for_status()
         index = r.json()
 
-        # 2) Locate PackageBaseAddress
-        base_addr = None
-        for res in index.get("resources", []):
-            t = res.get("@type")
-            if t == "PackageBaseAddress/3.0.0" or (
-                isinstance(t, list) and "PackageBaseAddress/3.0.0" in t
-            ):
-                base_addr = res["@id"]
-                break
+        # 2) Find PackageBaseAddress
+        base_addr = next(
+            (
+                res["@id"]
+                for res in index.get("resources", [])
+                if "PackageBaseAddress/3.0.0" in (
+                    res.get("@type", [])
+                    if isinstance(res.get("@type"), list)
+                    else [res.get("@type")]
+                )
+            ),
+            None,
+        )
 
         if not base_addr:
-            raise RuntimeError("PackageBaseAddress/3.0.0 not found in NuGet index")
+            raise RuntimeError("PackageBaseAddress/3.0.0 not found")
 
-        # 3) Build download URL
+        # 3) Build flat-container URL
         pkg = package_id.lower()
         ver = version.lower()
 
-        download_url = f"{base_addr.rstrip('/')}/{pkg}/{ver}/{pkg}.{ver}.nupkg"
+        download_url = (
+            f"{base_addr.rstrip('/')}/{pkg}/{ver}/{pkg}.{ver}.nupkg"
+        )
 
-        # 4) Download file
-        output_dir = Path(self.download_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # 4) Download
+        base = Path(self.download_dir)
+        base.mkdir(parents=True, exist_ok=True)
 
-        output_path = output_dir / f"{package_id}.{version}.nupkg"
-        resp = await self.client.get(download_url, headers=headers)
-        resp.raise_for_status()
+        r = await self.client.get(download_url, headers=headers)
+        r.raise_for_status()
 
-        output_path.write_bytes(resp.content)
+        path = base / f"{package_id}.{version}.nupkg"
+        path.write_bytes(r.content)
 
-        return output_path
+        return path
+
 
     # -------------------------------------------------------------------------
     # Cleanup

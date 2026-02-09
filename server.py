@@ -26,10 +26,6 @@ _CLIENTS: dict[str, OrchestratorClient] = {}
 async def get_client(account: str, tenant: str) -> OrchestratorClient:
     """
     Get or create an authenticated OrchestratorClient for an account/tenant.
-
-    Clients are cached per (account, tenant) to:
-    - reuse access tokens
-    - avoid redundant authentication
     """
     key = f"{account}/{tenant}"
 
@@ -48,16 +44,15 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 mcp = FastMCP("uipath-orchestrator")
 
 # -----------------------------------------------------------------------------
-# Discovery MCP resources (AUTHORITATIVE, READ-ONLY)
+# DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
 # -----------------------------------------------------------------------------
 
-@mcp.resource("uipath://orchestrator/accounts")
-async def orchestrator_accounts() -> list[dict]:
+@mcp.tool()
+async def list_accounts() -> list[dict]:
     """
     Lists all configured UiPath Orchestrator accounts.
 
-    AUTHORITATIVE RESOURCE.
-    Use this resource for discovery. Do NOT use tools to infer accounts.
+    READ-ONLY DISCOVERY TOOL.
     """
     accounts = get_available_accounts(CONFIG)
 
@@ -71,13 +66,13 @@ async def orchestrator_accounts() -> list[dict]:
     ]
 
 
-@mcp.resource("uipath://orchestrator/accounts/{account}/tenants")
-async def orchestrator_tenants(account: str) -> list[dict]:
+@mcp.tool()
+async def list_tenants(account: str) -> list[dict]:
     """
-    Lists all tenants available under a UiPath Orchestrator account.
+    Lists all tenants under a UiPath Orchestrator account.
 
-    AUTHORITATIVE RESOURCE.
-    Tenants are account-scoped metadata and are NOT folder-scoped.
+    READ-ONLY DISCOVERY TOOL.
+    Tenants are ACCOUNT-SCOPED.
     """
     tenants = get_available_tenants(CONFIG, account)
 
@@ -92,61 +87,53 @@ async def orchestrator_tenants(account: str) -> list[dict]:
     ]
 
 
-@mcp.resource("uipath://orchestrator/accounts/{account}/tenants/{tenant}/folders")
-async def orchestrator_folders(account: str, tenant: str) -> list[dict]:
+@mcp.tool()
+async def list_folders(account: str, tenant: str) -> list[dict]:
     """
-    Lists ALL UiPath Orchestrator folders in the specified tenant.
+    Lists all folders in a UiPath Orchestrator tenant.
 
-    AUTHORITATIVE RESOURCE.
-
-    IMPORTANT:
-    - Folders are TENANT-SCOPED metadata
-    - This is the ONLY correct way to list folders
-    - Tools must NEVER be used to infer or list folders
+    READ-ONLY DISCOVERY TOOL.
+    Folders are TENANT-SCOPED (not folder-scoped).
     """
     client = await get_client(account, tenant)
     return await client.get_folders()
 
 
-@mcp.resource("uipath://orchestrator/accounts/{account}/tenants/{tenant}/libraries")
-async def orchestrator_libraries(account: str, tenant: str) -> list[str]:
+@mcp.tool()
+async def list_libraries(account: str, tenant: str) -> list[str]:
     """
-    Lists all available UiPath library package IDs in the tenant.
+    Lists all UiPath library package IDs in a tenant.
 
-    AUTHORITATIVE RESOURCE.
-
-    IMPORTANT:
-    - Libraries are TENANT-SCOPED
-    - Libraries do NOT belong to folders
-    - No folder_id is required or valid
-    - Tools must NOT be used to list libraries
+    READ-ONLY DISCOVERY TOOL.
+    Libraries are TENANT-SCOPED.
     """
     client = await get_client(account, tenant)
     return await client.list_libraries()
 
 
-@mcp.resource("uipath://orchestrator/accounts/{account}/tenants/{tenant}/libraries/{package_id}/versions")
-async def orchestrator_library_versions(account: str, tenant: str, package_id: str) -> list[str]:
+@mcp.tool()
+async def list_library_versions( account: str, tenant: str, package_id: str) -> list[str]:
     """
-    Lists all available versions for a specific UiPath library package.
+    Lists all available versions for a UiPath library package.
 
-    AUTHORITATIVE RESOURCE.
-
-    IMPORTANT:
-    - Library versions are TENANT-SCOPED
-    - They are NOT folder-scoped
-    - Do NOT use tools to retrieve versions
+    READ-ONLY DISCOVERY TOOL.
+    Library versions are TENANT-SCOPED.
     """
     client = await get_client(account, tenant)
     return await client.list_library_versions(package_id)
 
 
 # -----------------------------------------------------------------------------
-# Operational tools (ACTIONS / COMPOSITE OPERATIONS ONLY)
+# FOLDER-SCOPED OPERATIONAL TOOLS
 # -----------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_folder_resources(resource_types: list[str],account: str,tenant: str,folder_id: int) -> str:
+async def get_folder_resources(
+    resource_types: list[str],
+    account: str,
+    tenant: str,
+    folder_id: int,
+) -> str:
     """
     Fetches folder-scoped UiPath Orchestrator resources such as:
     - assets
@@ -154,42 +141,32 @@ async def get_folder_resources(resource_types: list[str],account: str,tenant: st
     - triggers
     - environments
 
-    OPERATIONAL TOOL — NOT A DISCOVERY MECHANISM.
-
-    NOT SUPPORTED BY THIS TOOL:
-    - folders
-    - libraries
-    - library versions
-    - tenants
-    - accounts
+    OPERATIONAL TOOL.
 
     RULES:
-    - This tool REQUIRES a valid folder_id
-    - Folder discovery MUST use the /folders MCP resource
-    - Library discovery MUST use /libraries resources
-
-    Response contract:
-    - success  => list
-    - failure  => { "error": "<message>" }
+    - Requires a valid folder_id
+    - ONLY for folder-scoped entities
+    - NOT for folders, libraries, tenants, or accounts
     """
     client = await get_client(account, tenant)
     result = await client.get_resources(
         resource_types=resource_types,
         folder_id=folder_id,
     )
-
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
-async def download_library_version(account: str,tenant: str,package_id: str,version: str) -> str:
+async def download_library_version(
+    account: str,
+    tenant: str,
+    package_id: str,
+    version: str,) -> str:
     """
     Downloads a specific version of a UiPath library (.nupkg).
 
     OPERATIONAL TOOL.
-    This tool performs I/O and has side effects.
-
-    Discovery of libraries and versions MUST use MCP resources.
+    Performs I/O and has side effects.
     """
     client = await get_client(account, tenant)
     path = await client.download_library_version(
