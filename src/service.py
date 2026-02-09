@@ -83,6 +83,23 @@ def load_config() -> Config:
 # Load configuration at module level
 CONFIG = load_config()
 
+def get_available_accounts(config: dict) -> list[str]:
+    """
+    Get list of configured UiPath Orchestrator account names.
+    """
+    return list(config["accounts"].keys())
+
+
+def get_available_tenants(config: dict, account: str) -> list[str]:
+    """
+    Get list of configured tenants for an account.
+    """
+    account_cfg = config["accounts"].get(account)
+    if not account_cfg:
+        return []
+
+    return list(account_cfg.get("tenants", {}).keys())
+
 
 # -----------------------------------------------------------------------------
 # Orchestrator Client

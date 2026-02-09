@@ -4,25 +4,30 @@ Uncomment the test you want to run at the bottom
 """
 
 import asyncio
-from service import OrchestratorClient, CONFIG
+from service import (
+    OrchestratorClient,
+    CONFIG,
+    get_available_accounts,
+    get_available_tenants,
+)
 
 
-# Helper to get all account/tenant combinations from config
-def get_all_account_tenant_pairs():
-    """Returns list of (account, tenant) tuples from CONFIG"""
-    pairs = []
-    for account, account_config in CONFIG["accounts"].items():
-        for tenant in account_config["tenants"].keys():
+# Helper to get all account/tenant combinations from config (via helper functions)
+def get_all_account_tenant_pairs() -> list[tuple[str, str]]:
+    """Returns list of (account, tenant) tuples from CONFIG using helper functions."""
+    pairs: list[tuple[str, str]] = []
+
+    for account in get_available_accounts(CONFIG):
+        tenants = get_available_tenants(CONFIG, account)
+        for tenant in tenants:
             pairs.append((account, tenant))
+
     return pairs
 
 
 # -----------------------------------------------------------------------------
 # TEST 1: Authentication (shared token)
 # -----------------------------------------------------------------------------
-
-
-
 
 async def test_connection():
     """Test 1: Connection and Authentication (Shared Token)"""
@@ -35,10 +40,10 @@ async def test_connection():
     if not pairs:
         print("✗ FAIL: No accounts/tenants configured")
         return False
-    
+
     account, tenant = pairs[0]
     print(f"▶ Using: {account} / {tenant}")
-    
+
     client = OrchestratorClient(account=account, tenant=tenant)
 
     try:
@@ -68,13 +73,16 @@ async def test_connection():
 # TEST 2: Get folders (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
 
-
 async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
     print("TEST 2: Get Folders (Multi-Account, Multi-Tenant)")
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
+
     results = {}
 
     for account, tenant in pairs:
@@ -109,13 +117,9 @@ async def test_get_folders_multi_tenant():
     return True
 
 
-
-
-
 # -----------------------------------------------------------------------------
 # TEST 3: Get assets (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
-
 
 async def test_get_assets_multi_tenant():
     print("\n" + "=" * 60)
@@ -123,6 +127,9 @@ async def test_get_assets_multi_tenant():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
@@ -167,6 +174,9 @@ async def test_get_queues_multi_tenant():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
@@ -204,6 +214,9 @@ async def test_get_triggers_multi_tenant():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
@@ -241,6 +254,9 @@ async def test_get_processes_multi_tenant():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
@@ -284,6 +300,10 @@ async def test_list_library_versions_flow():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
+
     results = {}
 
     for account, tenant in pairs:
@@ -346,6 +366,8 @@ async def test_list_library_versions_flow():
         finally:
             await client.close()
 
+    # If you want a return value here, uncomment:
+    # return all(results.values()) if results else False
 
 
 # -----------------------------------------------------------------------------
@@ -370,7 +392,7 @@ async def test_download_library_version():
     if not pairs:
         print("✗ FAIL: No accounts/tenants configured")
         return False
-    
+
     results = {}
 
     for account, tenant in pairs:
@@ -403,8 +425,8 @@ async def test_download_library_version():
                 results[key] = False
                 continue
 
-            # Pick latest version
-            version = versions[-1]  # Last version (usually newest)
+            # Pick latest version (assuming list is ordered oldest -> newest)
+            version = versions[-1]
             print(f"▶ Downloading version: {version}")
 
             path = await client.download_library_version(
@@ -415,7 +437,7 @@ async def test_download_library_version():
             print(f"✓ Downloaded to: {path}")
 
             if not path.exists():
-                print(f"✗ FAIL: File does not exist on disk")
+                print("✗ FAIL: File does not exist on disk")
                 results[key] = False
                 continue
 
@@ -423,7 +445,7 @@ async def test_download_library_version():
             print(f"✓ File size: {size:,} bytes")
 
             if size == 0:
-                print(f"✗ FAIL: Downloaded file is empty")
+                print("✗ FAIL: Downloaded file is empty")
                 results[key] = False
                 continue
 
@@ -443,22 +465,23 @@ async def test_download_library_version():
     print("\n" + "=" * 60)
     print("SUMMARY: Download Library Test Results")
     print("=" * 60)
-    
+
     passed = sum(1 for v in results.values() if v is True)
     failed = sum(1 for v in results.values() if v is False)
     skipped = sum(1 for v in results.values() if v == "skipped")
-    
+
     for key, result in results.items():
         status = "✓ PASS" if result is True else "⚠ SKIP" if result == "skipped" else "✗ FAIL"
         print(f"  {status}: {key}")
-    
+
     print(f"\nTotal: {len(results)} | Passed: {passed} | Failed: {failed} | Skipped: {skipped}")
-    
+
     # Return True only if all tests passed (no failures)
     return failed == 0
 
+
 # -----------------------------------------------------------------------------
-# TEST 1: test_get_resources (multi-account, multi-tenant)
+# TEST 9: get_resources (multi-account, multi-tenant)
 # -----------------------------------------------------------------------------
 
 async def test_get_resources():
@@ -468,6 +491,9 @@ async def test_get_resources():
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("✗ FAIL: No accounts/tenants configured")
+        return False
 
     for account, tenant in pairs:
         key = f"{account}/{tenant}"
@@ -483,7 +509,7 @@ async def test_get_resources():
             folder_list = folders.get("value", [])
 
             if not folder_list:
-                print(f"  ⚠ No folders, skipping")
+                print("  ⚠ No folders, skipping")
                 continue
 
             print(f"  Found {len(folder_list)} folder(s)")
@@ -547,12 +573,12 @@ async def test_get_resources():
 if __name__ == "__main__":
     # Uncomment ONE test at a time:
 
-   # result = asyncio.run(test_connection())
-    #result = asyncio.run(test_get_folders_multi_tenant())
-    #result = asyncio.run(test_get_assets_multi_tenant())
-    #result = asyncio.run(test_get_queues_multi_tenant())
-    #result = asyncio.run(test_get_triggers_multi_tenant())
-    #result = asyncio.run(test_get_processes_multi_tenant())
-    #result = asyncio.run(test_list_library_versions_flow())
-    #result = asyncio.run(test_download_library_version())
+    # result = asyncio.run(test_connection())
+    # result = asyncio.run(test_get_folders_multi_tenant())
+    # result = asyncio.run(test_get_assets_multi_tenant())
+    # result = asyncio.run(test_get_queues_multi_tenant())
+    # result = asyncio.run(test_get_triggers_multi_tenant())
+    # result = asyncio.run(test_get_processes_multi_tenant())
+    # result = asyncio.run(test_list_library_versions_flow())
+    # result = asyncio.run(test_download_library_version())
     result = asyncio.run(test_get_resources())
