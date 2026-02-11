@@ -160,6 +160,22 @@ class OrchestratorClient:
         r.raise_for_status()
         return r.json()
 
+    async def post(self, endpoint: str,payload: dict, folder_id: int | None = None ) -> dict:
+        if not self._access_token:
+            await self.authenticate()
+
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
+
+        r = await self.client.post(
+            url,
+            headers=self._headers(folder_id),
+            json=payload,
+        )
+        r.raise_for_status()
+        return r.json()
     # -------------------------------------------------------------------------
     # OData normalization
     # -------------------------------------------------------------------------
@@ -204,16 +220,55 @@ class OrchestratorClient:
             for lib in self._unwrap_odata(data)
             if lib.get("Id")
         )
+    
+    # -------------------------------------------------------------------------
+# Folder tree builder
+# -------------------------------------------------------------------------
 
+    @staticmethod
+    def _build_folder_tree(folders: list[dict]) -> list[dict]:
+        """
+        Convert flat UiPath folder list into nested tree structure.
+        Preserves all original fields and adds 'children'.
+        """
+
+        # Create copy of folders indexed by Id
+        by_id: dict[int, dict] = {}
+
+        for folder in folders:
+            folder_copy = dict(folder)  # avoid mutating original
+            folder_copy["children"] = []
+            by_id[folder["Id"]] = folder_copy
+
+        root_nodes: list[dict] = []
+
+        for folder in by_id.values():
+            parent_id = folder.get("ParentId")
+
+            if parent_id and parent_id in by_id:
+                by_id[parent_id]["children"].append(folder)
+            else:
+                root_nodes.append(folder)
+
+        return root_nodes
+
+
+    async def get_folders_tree(self) -> dict:
+        """
+        Return folders as nested JSON tree.
+        Output format:
+        {
+            "result": [ ...tree... ]
+        }
+        """
+        folders = await self.get_folders()
+        return self._build_folder_tree(folders)
+       
     # -------------------------------------------------------------------------
     # Consolidated folder-scoped resource fetch
     # -------------------------------------------------------------------------
 
-    async def get_resources(
-        self,
-        resource_types: list[str],
-        folder_id: int,
-    ) -> dict[str, list | dict]:
+    async def get_resources(self, resource_types: list[str],folder_id: int) -> dict[str, list | dict]:
         VALID_RESOURCE_TYPES = {
             "assets": self.get_assets,
             "queues": self.get_queues,
@@ -243,6 +298,32 @@ class OrchestratorClient:
                 response[resource_type] = {"error": str(result)}
             else:
                 response[resource_type] = result or []
+
+        return response
+
+    # -------------------------------------------------------------------------
+    # Folder management
+    # -------------------------------------------------------------------------
+
+    async def create_folder(
+        self,
+        new_folder_name: str,
+        description: str | None = None,
+    ) -> dict:
+        """
+        Create a modern folder in the current tenant.
+        """
+
+        if not new_folder_name:
+            raise ValueError("new_folder_name cannot be empty")
+
+        payload = {
+            "DisplayName": new_folder_name,
+            "Description": description or "",
+            "ProvisionType": "Automatic",   # Modern folder
+        }
+
+        response = await self.post("odata/Folders", payload)
 
         return response
 

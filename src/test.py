@@ -4,12 +4,8 @@ Uncomment the test you want to run at the bottom
 """
 
 import asyncio
-from service import (
-    OrchestratorClient,
-    CONFIG,
-    get_available_accounts,
-    get_available_tenants,
-)
+from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -59,6 +55,49 @@ async def test_connection():
 # -----------------------------------------------------------------------------
 # TEST 2: Get folders
 # -----------------------------------------------------------------------------
+
+async def test_get_folders_tree_multi_tenant():
+    print("\n" + "=" * 60)
+    print("TEST 2: Get Folder Tree (Multi-Account, Multi-Tenant)")
+    print("=" * 60)
+
+    def print_tree(nodes: list[dict], level: int = 0):
+        """Recursively print folder tree."""
+        indent = "  " * level
+        for node in nodes:
+            print(
+                f"{indent}- {node.get('DisplayName')} "
+                f"(ID: {node.get('Id')})"
+            )
+            children = node.get("children", [])
+            if children:
+                print_tree(children, level + 1)
+
+    for account, tenant in get_all_account_tenant_pairs():
+        key = f"{account}/{tenant}"
+        client = OrchestratorClient(account, tenant)
+
+        try:
+            await client.authenticate()
+
+           
+            tree = await client.get_folders_tree()
+
+            print(f"\n✓ {key}: {len(tree)} root folders")
+
+            if tree:
+                print_tree(tree)
+
+        except Exception as e:
+            print(f"✗ {key}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
 
 async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
@@ -298,11 +337,12 @@ if __name__ == "__main__":
     # Uncomment ONE test at a time
 
      #asyncio.run(test_connection())
+     asyncio.run(test_get_folders_tree_multi_tenant())
      #asyncio.run(test_get_folders_multi_tenant())
      #asyncio.run(test_get_assets_multi_tenant())
      #asyncio.run(test_folder_collections("get_queues", "Queues"))
      #asyncio.run(test_folder_collections("get_triggers", "Triggers"))
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
-     asyncio.run(test_download_library_version())
+     #asyncio.run(test_download_library_version())
      #asyncio.run(test_get_resources())

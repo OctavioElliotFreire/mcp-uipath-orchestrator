@@ -9,12 +9,7 @@
 
 import json
 from mcp.server.fastmcp import FastMCP
-from src.service import (
-    OrchestratorClient,
-    CONFIG,
-    get_available_accounts,
-    get_available_tenants,
-)
+from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 
 # -----------------------------------------------------------------------------
 # Client cache (one client per account/tenant, shared token)
@@ -88,15 +83,22 @@ async def list_tenants(account: str) -> list[dict]:
 
 
 @mcp.tool()
-async def list_folders(account: str, tenant: str) -> list[dict]:
+async def list_folders_tree(account: str, tenant: str) -> list[dict]:
     """
-    Lists all folders in a UiPath Orchestrator tenant.
+    Returns the full folder hierarchy for a UiPath Orchestrator tenant.
 
-    READ-ONLY DISCOVERY TOOL.
-    Folders are TENANT-SCOPED (not folder-scoped).
+    The result is a nested tree structure where each folder includes a
+    "children" field containing its subfolders.
+
+    This tool is read-only and intended for structure discovery,
+    hierarchy inspection, and reasoning about existing folder layouts.
+
+    Important:
+    - Folders are tenant-scoped (not folder-scoped).
+    - No changes are made to the Orchestrator.
     """
     client = await get_client(account, tenant)
-    return await client.get_folders()
+    return await client.get_folders_tree()
 
 
 @mcp.tool()
@@ -128,54 +130,59 @@ async def list_library_versions( account: str, tenant: str, package_id: str) -> 
 # -----------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_folder_resources(
-    resource_types: list[str],
-    account: str,
-    tenant: str,
-    folder_id: int,
-) -> str:
+async def get_folder_resources(resource_types: list[str], account: str, tenant: str, folder_id: int) -> str:
     """
-    Fetches folder-scoped UiPath Orchestrator resources such as:
-    - assets
-    - queues
-    - triggers
-    - environments
+    Fetch one or more UiPath Orchestrator resource types from a folder.
 
-    OPERATIONAL TOOL.
+    This tool intentionally returns a JSON object where:
+      - list  => successful fetch
+      - dict with "error" => failure
 
-    RULES:
-    - Requires a valid folder_id
-    - ONLY for folder-scoped entities
-    - NOT for folders, libraries, tenants, or accounts
+    The response shape itself signals success vs failure, which:
+      - avoids redundant wrappers (items, error: null)
+      - reduces token usage
+      - is easier for LLMs to reason about
+      - supports partial success naturally
+
+    Example response:
+    {
+        "assets": [...],
+        "queues": [...],
+        "triggers": { "error": "403 Forbidden" }
+    }
     """
     client = await get_client(account, tenant)
     result = await client.get_resources(
         resource_types=resource_types,
-        folder_id=folder_id,
+        folder_id=folder_id
     )
+
+    # MCP tools must return strings; JSON is returned verbatim so the LLM
+    # can reason directly over the response structure.
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
-async def download_library_version(
-    account: str,
-    tenant: str,
-    package_id: str,
-    version: str,) -> str:
+async def download_library_version(account: str,tenant: str,package_id: str,version: str) -> str:
     """
-    Downloads a specific version of a UiPath library (.nupkg).
+    Download a specific version of a UiPath library (.nupkg)
+    using the configured download directory.
 
-    OPERATIONAL TOOL.
-    Performs I/O and has side effects.
+    Args:
+        account: UiPath account logical name
+        tenant: UiPath tenant name
+        package_id: Library package ID
+        version: Version string (e.g., "1.0.5")
+
+    Returns:
+        The local file path where the library was downloaded
     """
     client = await get_client(account, tenant)
     path = await client.download_library_version(
         package_id=package_id,
-        version=version,
+        version=version
     )
     return str(path)
-
-
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
