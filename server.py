@@ -183,6 +183,38 @@ async def download_library_version(account: str,tenant: str,package_id: str,vers
         version=version
     )
     return str(path)
+
+# -----------------------------------------------------------------------------
+# ACTION-SCOPED OPERATIONAL TOOLS
+# -----------------------------------------------------------------------------
+
+@mcp.tool()
+async def ensure_folder(
+    account: str,
+    tenant: str,
+    path: str,
+) -> dict:
+    """
+    Ensures that a folder path exists in a UiPath Orchestrator tenant.
+
+    The path may contain nested folders separated by "/"
+    (e.g. "Finance/Invoices/2025").
+
+    Behavior:
+    - Creates any missing parent folders automatically.
+    - Does nothing if the full path already exists.
+    - Returns the final (leaf) folder object.
+
+    This tool is idempotent and safe to call multiple times.
+
+    It does NOT modify permissions.
+    """
+
+    client = await get_client(account, tenant)
+    return await client.ensure_folder_path(path)
+
+
+
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------

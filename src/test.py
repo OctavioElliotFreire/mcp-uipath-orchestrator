@@ -328,6 +328,72 @@ async def test_get_resources():
 
     return True
 
+# -----------------------------------------------------------------------------
+# TEST 10: Ensure_folder_path
+# -----------------------------------------------------------------------------
+
+async def test_ensure_folder_path():
+    print("\n" + "=" * 60)
+    print("TEST: Ensure Folder Path")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+
+    test_path = "Shared/MCP_Test/Level1/Level2"
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        # 1️⃣ First call (should create folders)
+        leaf = await client.ensure_folder_path(test_path)
+
+        print(f"✓ Created or ensured path: {test_path}")
+        print(f"  Leaf Folder ID: {leaf.get('Id')}")
+
+        # 2️⃣ Second call (should NOT create duplicates)
+        leaf_again = await client.ensure_folder_path(test_path)
+
+        print("✓ Called ensure_folder_path again (idempotency check)")
+
+        if leaf["Id"] != leaf_again["Id"]:
+            print("✗ Id mismatch — not idempotent!")
+            return False
+
+        print("✓ Idempotency confirmed (same folder ID)")
+
+        # 3️⃣ Validate structure exists in tree
+        tree = await client.get_folders_tree()
+
+        def find_path(nodes, segments):
+            if not segments:
+                return True
+
+            for node in nodes:
+                if node["DisplayName"] == segments[0]:
+                    return find_path(node.get("children", []), segments[1:])
+
+            return False
+
+        exists = find_path(tree, test_path.split("/"))
+
+        if not exists:
+            print("✗ Folder path not found in tree")
+            return False
+
+        print("✓ Folder structure verified in tree")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Test failed: {e}")
+        return False
+
+    finally:
+        await client.close()
+
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -337,7 +403,7 @@ if __name__ == "__main__":
     # Uncomment ONE test at a time
 
      #asyncio.run(test_connection())
-     asyncio.run(test_get_folders_tree_multi_tenant())
+     #asyncio.run(test_get_folders_tree_multi_tenant())
      #asyncio.run(test_get_folders_multi_tenant())
      #asyncio.run(test_get_assets_multi_tenant())
      #asyncio.run(test_folder_collections("get_queues", "Queues"))
@@ -346,3 +412,4 @@ if __name__ == "__main__":
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
      #asyncio.run(test_get_resources())
+     asyncio.run(test_ensure_folder_path())

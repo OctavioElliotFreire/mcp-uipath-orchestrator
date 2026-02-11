@@ -308,24 +308,79 @@ class OrchestratorClient:
     async def create_folder(
         self,
         new_folder_name: str,
+        parent_id: int | None = None,
         description: str | None = None,
     ) -> dict:
         """
         Create a modern folder in the current tenant.
+
+        Supports nested folders via parent_id.
         """
 
-        if not new_folder_name:
+        name = (new_folder_name or "").strip()
+        if not name:
             raise ValueError("new_folder_name cannot be empty")
 
         payload = {
-            "DisplayName": new_folder_name,
+            "DisplayName": name,
             "Description": description or "",
-            "ProvisionType": "Automatic",   # Modern folder
+            "ProvisionType": "Automatic",
+            "ParentId": parent_id,
         }
 
-        response = await self.post("odata/Folders", payload)
+        return await self.post("odata/Folders", payload)
 
-        return response
+    
+    async def ensure_folder_path(self, path: str) -> dict:
+        """
+        Ensure that a nested folder path exists in the tenant.
+
+        Creates any missing folders along the path.
+        Returns the final (leaf) folder object.
+        """
+
+        if not path or not path.strip():
+            raise ValueError("path cannot be empty")
+
+        segments = [seg.strip() for seg in path.split("/") if seg.strip()]
+        if not segments:
+            raise ValueError("Invalid folder path")
+
+        # Fetch all folders once
+        folders = await self.get_folders()
+
+        # Build lookup: (parent_id, name) -> folder
+        index: dict[tuple[int | None, str], dict] = {}
+
+        for folder in folders:
+            key = (folder.get("ParentId"), folder["DisplayName"])
+            index[key] = folder
+
+        current_parent_id: int | None = None
+        current_folder: dict | None = None
+
+        for segment in segments:
+            lookup_key = (current_parent_id, segment)
+
+            if lookup_key in index:
+                # Folder already exists
+                current_folder = index[lookup_key]
+                current_parent_id = current_folder["Id"]
+            else:
+                # Create missing folder
+                new_folder = await self.create_folder(
+                    new_folder_name=segment,
+                    parent_id=current_parent_id,
+                )
+
+                # Update index so next level works
+                index[(current_parent_id, segment)] = new_folder
+
+                current_folder = new_folder
+                current_parent_id = new_folder["Id"]
+
+        return current_folder
+
 
     # -------------------------------------------------------------------------
     # NuGet helpers
