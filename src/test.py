@@ -394,6 +394,389 @@ async def test_ensure_folder_path():
     finally:
         await client.close()
 
+# -----------------------------------------------------------------------------
+# TEST 11: Ensure_folder_path
+# -----------------------------------------------------------------------------
+
+
+    print("\n" + "=" * 60)
+    print("TEST: Ensure Asset Local (CREATE-ONLY POLICY)")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+
+    folder_path = "Shared/MCP_Test/Level1/Level2"
+
+    import os
+    cred_password = os.getenv("MCP_TEST_CRED_PASSWORD", "").strip()
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        # Ensure folder exists once
+        await client.ensure_folder_path(folder_path)
+
+        test_cases = [
+            {
+                "label": "Text",
+                "name": "MCP_TEST_ASSET_TEXT",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_TEXT",
+                    "ValueType": "Text",
+                    "Value": "initial_value",
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_TEXT",
+                    "ValueType": "Text",
+                    "Value": "should_not_update",
+                },
+                "field": "StringValue",
+            },
+            {
+                "label": "Bool",
+                "name": "MCP_TEST_ASSET_BOOL",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_BOOL",
+                    "ValueType": "Bool",
+                    "Value": False,
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_BOOL",
+                    "ValueType": "Bool",
+                    "Value": True,
+                },
+                "field": "BoolValue",
+            },
+            {
+                "label": "Integer",
+                "name": "MCP_TEST_ASSET_INT",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_INT",
+                    "ValueType": "Integer",
+                    "Value": 1,
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_INT",
+                    "ValueType": "Integer",
+                    "Value": 999,
+                },
+                "field": "IntValue",
+            },
+        ]
+
+        # Add Credential case only if password provided
+        if cred_password:
+            test_cases.append(
+                {
+                    "label": "Credential",
+                    "name": "MCP_TEST_ASSET_CRED",
+                    "spec_create": {
+                        "Name": "MCP_TEST_ASSET_CRED",
+                        "ValueType": "Credential",
+                        "Value": {
+                            "username": "mcp_test_user",
+                            "password": cred_password,
+                        },
+                    },
+                    "spec_update": {
+                        "Name": "MCP_TEST_ASSET_CRED",
+                        "ValueType": "Credential",
+                        "Value": {
+                            "username": "mcp_test_user",
+                            "password": "different_password_should_be_ignored",
+                        },
+                    },
+                    "field": "CredentialUsername",  # password is never returned
+                }
+            )
+        else:
+            print("⚠ Skipping Credential test (MCP_TEST_CRED_PASSWORD not set)")
+
+        # ----------------------------------------------------------
+        # Execute test cases
+        # ----------------------------------------------------------
+        for case in test_cases:
+
+            print("\n" + "-" * 60)
+            print(f"CASE: {case['label']} ({case['name']})")
+            print("-" * 60)
+
+            # 1️⃣ Create
+            asset1 = await client.ensure_asset_local(
+                folder_path,
+                case["spec_create"],
+            )
+
+            print(f"✓ Created or ensured — Asset ID: {asset1.get('Id')}")
+
+            # 2️⃣ Call again with modified value (should NOT update)
+            asset2 = await client.ensure_asset_local(
+                folder_path,
+                case["spec_update"],
+            )
+
+            if asset1.get("Id") != asset2.get("Id"):
+                raise AssertionError("✗ Asset ID changed — not idempotent")
+
+            print("✓ No update performed (create-only policy)")
+            print("✓ Idempotency confirmed")
+
+            # 3️⃣ Verify original value still stored
+            folder = await client.ensure_folder_path(folder_path)
+            assets = await client.get_assets(folder["Id"])
+
+            stored = next(
+                (a for a in assets if a["Name"] == case["name"]),
+                None,
+            )
+
+            if not stored:
+                raise AssertionError("✗ Asset not found after ensure")
+
+            field = case["field"]
+
+            if case["label"] == "Credential":
+                expected = case["spec_create"]["Value"]["username"]
+            else:
+                expected = case["spec_create"]["Value"]
+
+            if stored.get(field) != expected:
+                raise AssertionError(
+                    f"✗ Asset value was modified unexpectedly "
+                    f"(expected={expected}, got={stored.get(field)})"
+                )
+
+            print("✓ Verified original value preserved")
+
+        print("\n" + "=" * 60)
+        print("✓ PASS: All create-only asset tests completed successfully")
+        print("=" * 60)
+
+        return True
+
+    except Exception as e:
+        print(f"\n✗ FAIL: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+async def test_ensure_asset_local():
+    print("\n" + "=" * 60)
+    print("TEST: Ensure Asset Local (CREATE-ONLY POLICY)")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+    folder_path = "Shared/MCP_Test/Level1/Level2"
+
+    TEST_PASSWORD = "TestPassword123!"
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+        await client.ensure_folder_path(folder_path)
+
+        test_cases = [
+            {
+                "label": "Text",
+                "name": "MCP_TEST_ASSET_TEXT",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_TEXT",
+                    "ValueType": "Text",
+                    "Value": "initial_value",
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_TEXT",
+                    "ValueType": "Text",
+                    "Value": "should_not_update",
+                },
+                "field": "StringValue",
+            },
+            {
+                "label": "Bool",
+                "name": "MCP_TEST_ASSET_BOOL",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_BOOL",
+                    "ValueType": "Bool",
+                    "Value": False,
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_BOOL",
+                    "ValueType": "Bool",
+                    "Value": True,
+                },
+                "field": "BoolValue",
+            },
+            {
+                "label": "Integer",
+                "name": "MCP_TEST_ASSET_INT",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_INT",
+                    "ValueType": "Integer",
+                    "Value": 1,
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_INT",
+                    "ValueType": "Integer",
+                    "Value": 999,
+                },
+                "field": "IntValue",
+            },
+            {
+                "label": "Credential",
+                "name": "MCP_TEST_ASSET_CRED",
+                "spec_create": {
+                    "Name": "MCP_TEST_ASSET_CRED",
+                    "ValueType": "Credential",
+                    "Value": None,  # ignored
+                },
+                "spec_update": {
+                    "Name": "MCP_TEST_ASSET_CRED",
+                    "ValueType": "Credential",
+                    "Value": None,  # ignored
+                },
+                "field": None,
+            },
+        ]
+
+        # ----------------------------------------------------------
+        # Execute test cases
+        # ----------------------------------------------------------
+        for case in test_cases:
+
+            print("\n" + "-" * 60)
+            print(f"CASE: {case['label']} ({case['name']})")
+            print("-" * 60)
+
+            # 1️⃣ Create
+            asset1 = await client.ensure_asset_local(
+                folder_path,
+                case["spec_create"],
+            )
+
+            print(f"✓ Created or ensured — Asset ID: {asset1.get('Id')}")
+
+            # 2️⃣ Call again with modified value (should NOT update)
+            asset2 = await client.ensure_asset_local(
+                folder_path,
+                case["spec_update"],
+            )
+
+            if asset1.get("Id") != asset2.get("Id"):
+                raise AssertionError("✗ Asset ID changed — not idempotent")
+
+            print("✓ No update performed (create-only policy)")
+            print("✓ Idempotency confirmed")
+
+            # 3️⃣ For non-credential types, verify original value preserved
+            if case["field"]:
+
+                folder = await client.ensure_folder_path(folder_path)
+                assets = await client.get_assets(folder["Id"])
+
+                stored = next(
+                    (a for a in assets if a["Name"] == case["name"]),
+                    None,
+                )
+
+                if not stored:
+                    raise AssertionError("✗ Asset not found after ensure")
+
+                expected = case["spec_create"]["Value"]
+
+                if stored.get(case["field"]) != expected:
+                    raise AssertionError(
+                        f"✗ Asset value was modified unexpectedly "
+                        f"(expected={expected}, got={stored.get(case['field'])})"
+                    )
+
+                print("✓ Verified original value preserved")
+
+            else:
+                print("✓ Credential created and idempotent (value not validated)")
+
+        print("\n" + "=" * 60)
+        print("✓ PASS: All create-only asset tests completed successfully")
+        print("=" * 60)
+
+        return True
+
+    except Exception as e:
+        print(f"\n✗ FAIL: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+# -----------------------------------------------------------------------------
+# TEST: attach_asset_linked_folders
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# TEST: attach_asset_linked_folders (DISPLAY ONLY)
+# -----------------------------------------------------------------------------
+
+async def test_attach_asset_linked_folders():
+    print("\n" + "=" * 60)
+    print("TEST: attach_asset_linked_folders() — DISPLAY OUTPUT (FIRST TENANT)")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    print(f"Using: {account}/{tenant}")
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        folders = await client.get_folders()
+        if not folders:
+            print("No folders found.")
+            return False
+
+        # Pick first folder that contains assets
+        for folder in folders:
+            raw_assets = await client.get_assets(folder["Id"])
+
+            if raw_assets:
+                print(f"\nFolder: {folder['DisplayName']}")
+
+                enhanced = await client.attach_asset_linked_folders(raw_assets)
+                print(enhanced)
+                for asset in enhanced:
+                    print("\n-----------------------------------")
+                    print(f"Asset Name : {asset.get('Name')}")
+                    print(f"Asset ID   : {asset.get('Id')}")
+                    print(f"Type       : {asset.get('ValueType')}")
+                    print("LinkedFolders:")
+
+                    for lf in asset.get("LinkedFolders", []):
+                        print(f"   - {lf}")
+
+                return True
+
+        print("No assets found in any folder.")
+        return False
+
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -412,4 +795,6 @@ if __name__ == "__main__":
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
      #asyncio.run(test_get_resources())
-     asyncio.run(test_ensure_folder_path())
+     #asyncio.run(test_ensure_folder_path())
+     #asyncio.run(test_ensure_asset_local())
+     asyncio.run(test_attach_asset_linked_folders())

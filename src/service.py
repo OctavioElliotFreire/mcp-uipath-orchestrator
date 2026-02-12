@@ -93,6 +93,11 @@ class OrchestratorClient:
         self.client_id = account_cfg["auth"]["client_id"]
         self.client_secret = account_cfg["auth"]["client_secret"]
         self.libraries_feed_id = account_cfg["tenants"][tenant]["libraries_feed_id"]
+        self._credential_defaults = {
+            "username": "mcp_default_user",
+            "password": "DefaultPassword123!"
+        }
+
 
         self._access_token: str | None = None
 
@@ -176,6 +181,30 @@ class OrchestratorClient:
         )
         r.raise_for_status()
         return r.json()
+    
+    async def put(self, endpoint: str, payload: dict, folder_id: int | None = None) -> dict:
+        if not self._access_token:
+            await self.authenticate()
+
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
+
+        r = await self.client.put(
+            url,
+            headers=self._headers(folder_id),
+            json=payload,
+        )
+
+        r.raise_for_status()
+
+        # handle 204 / empty body
+        if not r.content:
+            return {}
+
+        return r.json()
+        
     # -------------------------------------------------------------------------
     # OData normalization
     # -------------------------------------------------------------------------
@@ -380,7 +409,192 @@ class OrchestratorClient:
                 current_parent_id = new_folder["Id"]
 
         return current_folder
+    
+    async def ensure_asset_local2(self,folder_path: str, asset_spec: dict) -> dict:
 
+        name = asset_spec.get("Name")
+        value_type = asset_spec.get("ValueType")
+        value = asset_spec.get("Value")
+
+        if not name or not value_type:
+            raise ValueError("Asset spec must include 'Name' and 'ValueType'")
+
+        folder = await self.ensure_folder_path(folder_path)
+        folder_id = folder["Id"]
+
+        assets = await self.get_assets(folder_id)
+
+        existing = next(
+            (a for a in assets if a["Name"] == name),
+            None
+        )
+
+        # ----------------------------------------------------------
+        # IF EXISTS → RETURN (NO UPDATE)
+        # ----------------------------------------------------------
+        if existing:
+            return existing
+
+        # ----------------------------------------------------------
+        # CREATE
+        # ----------------------------------------------------------
+        payload = {
+            "Name": name,
+            "ValueType": value_type,
+            "ValueScope": "Global",
+        }
+
+        if value_type == "Text":
+            payload["StringValue"] = value
+
+        elif value_type == "Bool":
+            payload["BoolValue"] = value
+
+        elif value_type == "Integer":
+            payload["IntValue"] = value
+
+        elif value_type == "Credential":
+
+            if not isinstance(value, dict):
+                raise ValueError("Credential Value must be dict with username/password")
+
+            username = value.get("username")
+            password = value.get("password")
+
+            if not username or not password:
+                raise ValueError("Credential requires username and password")
+
+            payload["CredentialUsername"] = username
+            payload["CredentialPassword"] = password
+
+        else:
+            raise ValueError(f"Unsupported ValueType: {value_type}")
+
+        return await self.post(
+            "odata/Assets",
+            payload,
+            folder_id=folder_id,
+        )
+
+    async def ensure_asset_local(self,folder_path: str,asset_spec: dict) -> dict:
+
+        name = asset_spec.get("Name")
+        value_type = asset_spec.get("ValueType")
+        value = asset_spec.get("Value")
+
+        if not name or not value_type:
+            raise ValueError("Asset spec must include 'Name' and 'ValueType'")
+
+        folder = await self.ensure_folder_path(folder_path)
+        folder_id = folder["Id"]
+
+        assets = await self.get_assets(folder_id)
+
+        existing = next(
+            (a for a in assets if a["Name"] == name),
+            None
+        )
+
+        # ----------------------------------------------------------
+        # IF EXISTS → RETURN (NO UPDATE)
+        # ----------------------------------------------------------
+        if existing:
+            return existing
+
+        # ----------------------------------------------------------
+        # CREATE
+        # ----------------------------------------------------------
+        payload = {
+            "Name": name,
+            "ValueType": value_type,
+            "ValueScope": "Global",
+        }
+
+        if value_type == "Text":
+            payload["StringValue"] = value
+
+        elif value_type == "Bool":
+            payload["BoolValue"] = value
+
+        elif value_type == "Integer":
+            payload["IntValue"] = value
+
+        elif value_type == "Credential":
+
+            # 🔐 Credentials are environment-owned.
+            # LLM does NOT provide secrets.
+            default_username = self._credential_defaults["username"]
+            default_password = self._credential_defaults["password"]
+
+            payload["CredentialUsername"] = default_username
+            payload["CredentialPassword"] = default_password
+
+        else:
+            raise ValueError(f"Unsupported ValueType: {value_type}")
+
+        return await self.post(
+            "odata/Assets",
+            payload,
+            folder_id=folder_id,
+        )
+
+    async def attach_asset_linked_folders(
+        self,
+        assets: list[dict]
+    ) -> list[dict]:
+        """
+        Given a list of asset objects, attach a new key:
+        'LinkedFolders': [list of folder paths where asset is assigned]
+        """
+
+        if not assets:
+            return assets
+
+        # Step 1: Get all folders in tenant
+        all_folders = await self.get_folders()
+        by_id = {f["Id"]: f for f in all_folders}
+
+        def build_path(fid: int) -> str:
+            parts = []
+            current = by_id.get(fid)
+            while current:
+                parts.append(current["DisplayName"])
+                current = by_id.get(current.get("ParentId"))
+            return "/".join(reversed(parts))
+
+        # Step 2: Build global AssetId → folder path map
+        asset_links: dict[int, set[str]] = {}
+
+        for folder in all_folders:
+            fid = folder["Id"]
+
+            try:
+                folder_assets = await self.get_assets(fid)
+            except Exception:
+                continue  # skip inaccessible folders
+
+            for asset in folder_assets:
+                aid = asset["Id"]
+
+                if aid not in asset_links:
+                    asset_links[aid] = set()
+
+                asset_links[aid].add(build_path(fid))
+
+        # Step 3: Attach LinkedFolders to provided assets
+        enhanced = []
+
+        for asset in assets:
+            aid = asset.get("Id")
+
+            enhanced_asset = dict(asset)
+            enhanced_asset["LinkedFolders"] = sorted(
+                asset_links.get(aid, [])
+            )
+
+            enhanced.append(enhanced_asset)
+
+        return enhanced
 
     # -------------------------------------------------------------------------
     # NuGet helpers

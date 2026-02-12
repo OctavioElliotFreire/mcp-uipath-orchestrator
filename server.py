@@ -213,6 +213,26 @@ async def ensure_folder(
     client = await get_client(account, tenant)
     return await client.ensure_folder_path(path)
 
+@mcp.tool()
+async def ensure_asset(
+    account: str,
+    tenant: str,
+    folder_path: str,
+    asset_spec: dict,
+) -> dict:
+    """
+    Ensures a LOCAL asset exists in a folder and matches the provided specification.
+
+    Behavior:
+    - Creates the asset if missing.
+    - Updates it if values differ.
+    - Does nothing if already correct.
+
+    This tool does NOT manage linking or inheritance.
+    """
+
+    client = await get_client(account, tenant)
+    return await client.ensure_asset_local(folder_path, asset_spec)
 
 
 # -----------------------------------------------------------------------------
