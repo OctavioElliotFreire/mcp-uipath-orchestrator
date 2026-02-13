@@ -829,6 +829,94 @@ async def test_attach_linked_folders_all_resources():
         await client.close()
 
 # -----------------------------------------------------------------------------
+# TEST: ensure_asset_local + link_asset_to_folder (Fixed Context)
+# -----------------------------------------------------------------------------
+
+async def test_ensure_and_link_asset():
+    print("\n" + "=" * 60)
+    print("TEST: ensure_asset_local() + link_asset_to_folder()")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+    folder_path = "Shared/MCP_Test/Level1/Level2"
+
+    # We will link into a sibling folder for testing
+    link_folder_path = "Shared/MCP_Test/Level1/LinkedFolder"
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        asset_spec = {
+            "Name": "MCP_TEST_ASSET",
+            "ValueType": "Text",
+            "Value": "TEST_VALUE"
+        }
+
+        # ----------------------------------------------------------
+        # Step 1: Ensure asset exists
+        # ----------------------------------------------------------
+        print("\nStep 1: Ensuring asset")
+
+        asset = await client.ensure_asset_local(folder_path, asset_spec)
+
+        print(f"✓ Asset ID: {asset.get('Id')}")
+        print(f"✓ Asset Name: {asset.get('Name')}")
+
+        # Idempotency check
+        asset_again = await client.ensure_asset_local(folder_path, asset_spec)
+
+        if asset_again.get("Id") != asset.get("Id"):
+            print("✗ Asset ID changed on ensure — not idempotent")
+            return False
+
+        print("✓ Ensure is idempotent")
+
+        # ----------------------------------------------------------
+        # Step 2: Link asset to another folder
+        # ----------------------------------------------------------
+        print("\nStep 2: Linking asset")
+
+        link_result = await client.link_asset_to_folder(
+            asset_id=asset["Id"],
+            folder_path=link_folder_path
+        )
+
+        print(f"✓ Linked Asset ID: {link_result.get('asset_id')}")
+        print(f"✓ Linked To: {link_result.get('linked_to')}")
+
+        # ----------------------------------------------------------
+        # Step 3: Verify asset appears in linked folder
+        # ----------------------------------------------------------
+        print("\nStep 3: Verifying linked folder contains asset")
+
+        linked_folder = await client.ensure_folder_path(link_folder_path)
+        assets_in_linked_folder = await client.get_assets(linked_folder["Id"])
+
+        found = any(a["Id"] == asset["Id"] for a in assets_in_linked_folder)
+
+        if not found:
+            print("✗ Asset not found in linked folder")
+            return False
+
+        print("✓ Asset successfully linked")
+
+        print("\n" + "=" * 60)
+        print("✓ TEST PASSED")
+        print("=" * 60)
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+# -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
 
@@ -844,8 +932,9 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     asyncio.run(test_get_resources())
+     #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_asset_local())
      #asyncio.run(test_attach_asset_linked_folders())
      #asyncio.run(test_attach_linked_folders_all_resources())
+     asyncio.run(test_ensure_and_link_asset())

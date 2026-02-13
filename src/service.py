@@ -181,6 +181,11 @@ class OrchestratorClient:
             json=payload,
         )
         r.raise_for_status()
+        
+        # Handle empty responses (204 No Content, etc.)
+        if r.status_code == 204 or not r.text.strip():
+            return {}
+        
         return r.json()
     
     async def put(self, endpoint: str, payload: dict, folder_id: int | None = None) -> dict:
@@ -379,8 +384,7 @@ class OrchestratorClient:
         }
 
         return await self.post("odata/Folders", payload)
-
-    
+  
     async def ensure_folder_path(self, path: str) -> dict:
         """
         Ensure that a nested folder path exists in the tenant.
@@ -430,8 +434,16 @@ class OrchestratorClient:
                 current_parent_id = new_folder["Id"]
 
         return current_folder
-    
+   
     async def ensure_asset_local(self,folder_path: str,asset_spec: dict) -> dict:
+        """
+        Ensure an asset exists in the specified folder.
+
+        Create-only policy:
+        - If asset exists → return it (no update).
+        - If not → create it.
+        - Credentials use environment-owned defaults.
+        """
 
         name = asset_spec.get("Name")
         value_type = asset_spec.get("ValueType")
@@ -440,9 +452,11 @@ class OrchestratorClient:
         if not name or not value_type:
             raise ValueError("Asset spec must include 'Name' and 'ValueType'")
 
+        # Resolve folder (create if missing — this is intentional for ensure)
         folder = await self.ensure_folder_path(folder_path)
         folder_id = folder["Id"]
 
+        # Check if asset already exists in this folder
         assets = await self.get_assets(folder_id)
 
         existing = next(
@@ -457,7 +471,7 @@ class OrchestratorClient:
             return existing
 
         # ----------------------------------------------------------
-        # CREATE
+        # CREATE NEW ASSET
         # ----------------------------------------------------------
         payload = {
             "Name": name,
@@ -476,8 +490,8 @@ class OrchestratorClient:
 
         elif value_type == "Credential":
 
-            # 🔐 Credentials are environment-owned.
-            # LLM does NOT provide secrets.
+            # Credentials are environment-owned.
+            # LLM must NOT provide secrets.
             default_username = self._credential_defaults["username"]
             default_password = self._credential_defaults["password"]
 
@@ -492,68 +506,57 @@ class OrchestratorClient:
             payload,
             folder_id=folder_id,
         )
-
     
-        """
-        Given a list of asset objects, attach a new key:
-        'LinkedFolders': [list of folder paths where asset is assigned]
-        """
+    async def link_asset_to_folder(
+            self,
+            asset_id: int,
+            folder_path: str
+        ) -> dict:
+            """
+            Link an existing asset to a single folder (Automation Cloud).
 
-        if not assets:
-            return assets
+            Idempotent:
+            - Safe if already linked (handles 409 Conflict).
+            - Does not remove existing assignments.
+            """
 
-        # Step 1: Get all folders in tenant
-        all_folders = await self.get_folders()
-        by_id = {f["Id"]: f for f in all_folders}
+            if not asset_id:
+                raise ValueError("asset_id is required")
 
-        def build_path(fid: int) -> str:
-            parts = []
-            current = by_id.get(fid)
-            while current:
-                parts.append(current["DisplayName"])
-                current = by_id.get(current.get("ParentId"))
-            return "/".join(reversed(parts))
+            if not folder_path:
+                raise ValueError("folder_path is required")
 
-        # Step 2: Build global AssetId → folder path map
-        asset_links: dict[int, set[str]] = {}
+            # ----------------------------------------------------------
+            # Resolve folder path → folder ID
+            # ----------------------------------------------------------
+            folder = await self.ensure_folder_path(folder_path)
+            folder_id = folder["Id"]
 
-        for folder in all_folders:
-            fid = folder["Id"]
+            payload = {
+                "AssetIds": [asset_id],
+                "toAddFolderIds": [folder_id],
+                "toRemoveFolderIds": []
+            }
 
             try:
-                folder_assets = await self.get_queues(fid)
-            except Exception:
-                continue  # skip inaccessible folders
+                await self.post(
+                    "odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
+                    payload,
+                    folder_id=folder_id  # ensures OU header is set
+                )
+            except httpx.HTTPStatusError as e:
+                # 409 Conflict means asset is already linked to this folder
+                # This is expected and acceptable for idempotent behavior
+                if e.response.status_code == 409:
+                    pass  # Already linked - idempotent success
+                else:
+                    raise
 
-            for asset in folder_assets:
-                aid = asset["Id"]
-
-                if aid not in asset_links:
-                    asset_links[aid] = set()
-
-                asset_links[aid].add(build_path(fid))
-
-        # Step 3: Attach LinkedFolders to provided assets
-        enhanced = []
-
-        for asset in assets:
-            aid = asset.get("Id")
-
-            enhanced_asset = dict(asset)
-            enhanced_asset["LinkedFolders"] = sorted(
-                asset_links.get(aid, [])
-            )
-
-            enhanced.append(enhanced_asset)
-
-        return enhanced
-
-    
-    async def _attach_linked_folders(
-        self,
-        items: List[dict],
-        resource_type: str,
-    ) -> List[dict]:
+            return {
+                "asset_id": asset_id,
+                "linked_to": folder_path
+            }
+    async def _attach_linked_folders(self,items: List[dict],resource_type: str) -> List[dict]:
         """
         Optimized version:
         - Fetch folder items concurrently
