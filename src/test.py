@@ -1,8 +1,10 @@
+
+
 """
 Individual tests for UiPath Orchestrator Client (Multi-Account, Multi-Tenant)
 Uncomment the test you want to run at the bottom
 """
-
+import json
 import asyncio
 from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 
@@ -290,44 +292,64 @@ async def test_download_library_version():
 
 async def test_get_resources():
     print("\n" + "=" * 60)
-    print("TEST: get_resources()")
+    print("TEST: get_resources() — FULL OUTPUT")
     print("=" * 60)
 
-    for account, tenant in get_all_account_tenant_pairs():
-        key = f"{account}/{tenant}"
-        client = OrchestratorClient(account, tenant)
+    pairs = get_all_account_tenant_pairs()
 
-        try:
-            await client.authenticate()
-            folders = await client.get_folders()
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
 
-            if not folders:
-                print(f"⚠ {key}: No folders")
-                continue
+    # Only first tenant for faster execution
+    account, tenant = pairs[0]
+    key = f"{account}/{tenant}"
+    print(f"Using: {key}")
 
-            for folder in folders[:5]:
-                print(f"\n📁 {folder['DisplayName']} ({folder['Id']})")
+    client = OrchestratorClient(account, tenant)
 
-                result = await client.get_resources(
-                    resource_types=["assets", "queues", "processes", "triggers"],
-                    folder_id=folder["Id"],
-                )
+    try:
+        await client.authenticate()
+        folders = await client.get_folders()
 
-                for k, v in result.items():
-                    if isinstance(v, dict) and "error" in v:
-                        print(f"  ✗ {k}: {v['error']}")
-                    else:
-                        print(f"  ✓ {k}: {len(v)}")
-
-        except Exception as e:
-            print(f"✗ {key}: {e}")
+        if not folders:
+            print("No folders found.")
             return False
 
-        finally:
-            await client.close()
+        # Test first 3 folders only for readability
+        for folder in folders[:3]:
+            print(f"\n📁 Folder: {folder['DisplayName']} ({folder['Id']})")
 
-    return True
+            result = await client.get_resources(
+                resource_types=["assets", "queues", "processes", "triggers", "storage_buckets"],
+                folder_id=folder["Id"],
+            )
 
+            for resource_type, items in result.items():
+                print("\n" + "-" * 50)
+                print(f"RESOURCE TYPE: {resource_type}")
+                print("-" * 50)
+
+                if isinstance(items, dict) and "error" in items:
+                    print(f"ERROR: {items['error']}")
+                    continue
+
+                if not items:
+                    print("No items.")
+                    continue
+
+                for idx, item in enumerate(items, 1):
+                    print(f"\nItem #{idx}:")
+                    print(json.dumps(item, indent=4, default=str))
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return False
+
+    finally:
+        await client.close()
 # -----------------------------------------------------------------------------
 # TEST 10: Ensure_folder_path
 # -----------------------------------------------------------------------------
@@ -713,21 +735,18 @@ async def test_ensure_asset_local():
     finally:
         await client.close()
 
-# -----------------------------------------------------------------------------
-# TEST: attach_asset_linked_folders
-# -----------------------------------------------------------------------------
+
 
 # -----------------------------------------------------------------------------
-# TEST: attach_asset_linked_folders (DISPLAY ONLY)
+# TEST: _attach_linked_folders (assets, queues, storage_buckets)
 # -----------------------------------------------------------------------------
 
-async def test_attach_asset_linked_folders():
+async def test_attach_linked_folders_all_resources():
     print("\n" + "=" * 60)
-    print("TEST: attach_asset_linked_folders() — DISPLAY OUTPUT (FIRST TENANT)")
+    print("TEST: _attach_linked_folders() — assets, queues, buckets")
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
-
     if not pairs:
         print("No account/tenant configured.")
         return False
@@ -745,28 +764,61 @@ async def test_attach_asset_linked_folders():
             print("No folders found.")
             return False
 
-        # Pick first folder that contains assets
+        # Pick first folder with any resource
         for folder in folders:
-            raw_assets = await client.get_assets(folder["Id"])
+            folder_id = folder["Id"]
+            print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
 
-            if raw_assets:
-                print(f"\nFolder: {folder['DisplayName']}")
+            # ---------------- ASSETS ----------------
+            assets = await client.get_assets(folder_id)
+            if assets:
+                print("\n--- Assets ---")
+                enhanced_assets = await client._attach_linked_folders(
+                    assets,
+                    "assets"
+                )
 
-                enhanced = await client.attach_asset_linked_folders(raw_assets)
-                print(enhanced)
-                for asset in enhanced:
-                    print("\n-----------------------------------")
-                    print(f"Asset Name : {asset.get('Name')}")
-                    print(f"Asset ID   : {asset.get('Id')}")
-                    print(f"Type       : {asset.get('ValueType')}")
+                for item in enhanced_assets:
+                    print(f"\nAsset: {item.get('Name')} (ID: {item.get('Id')})")
                     print("LinkedFolders:")
-
-                    for lf in asset.get("LinkedFolders", []):
+                    for lf in item.get("LinkedFolders", []):
                         print(f"   - {lf}")
 
+            # ---------------- QUEUES ----------------
+            queues = await client.get_queues(folder_id)
+            if queues:
+                print("\n--- Queues ---")
+                enhanced_queues = await client._attach_linked_folders(
+                    queues,
+                    "queues"
+                )
+
+                for item in enhanced_queues:
+                    print(f"\nQueue: {item.get('Name')} (ID: {item.get('Id')})")
+                    print("LinkedFolders:")
+                    for lf in item.get("LinkedFolders", []):
+                        print(f"   - {lf}")
+
+            # ---------------- STORAGE BUCKETS ----------------
+            buckets = await client.get_storage_buckets(folder_id)
+            if buckets:
+                print("\n--- Storage Buckets ---")
+                enhanced_buckets = await client._attach_linked_folders(
+                    buckets,
+                    "storage_buckets"
+                )
+
+                for item in enhanced_buckets:
+                    print(f"\nBucket: {item.get('Name')} (ID: {item.get('Id')})")
+                    print("LinkedFolders:")
+                    for lf in item.get("LinkedFolders", []):
+                        print(f"   - {lf}")
+
+            # Run only on first folder with data
+            if assets or queues or buckets:
                 return True
 
-        print("No assets found in any folder.")
+        print("No resources found in any folder.")
         return False
 
     except Exception as e:
@@ -775,8 +827,6 @@ async def test_attach_asset_linked_folders():
 
     finally:
         await client.close()
-
-
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -794,7 +844,8 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     #asyncio.run(test_get_resources())
+     asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_asset_local())
-     asyncio.run(test_attach_asset_linked_folders())
+     #asyncio.run(test_attach_asset_linked_folders())
+     #asyncio.run(test_attach_linked_folders_all_resources())

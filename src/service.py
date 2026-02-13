@@ -4,7 +4,8 @@ import httpx
 from pathlib import Path
 from typing import TypedDict
 import asyncio
-
+import asyncio
+from typing import List, Dict, Set
 # -----------------------------------------------------------------------------
 # Configuration Types
 # -----------------------------------------------------------------------------
@@ -297,7 +298,12 @@ class OrchestratorClient:
     # Consolidated folder-scoped resource fetch
     # -------------------------------------------------------------------------
 
-    async def get_resources(self, resource_types: list[str],folder_id: int) -> dict[str, list | dict]:
+    async def get_resources(
+        self,
+        resource_types: list[str],
+        folder_id: int
+    ) -> dict[str, list | dict]:
+
         VALID_RESOURCE_TYPES = {
             "assets": self.get_assets,
             "queues": self.get_queues,
@@ -306,6 +312,8 @@ class OrchestratorClient:
             "storage_buckets": self.get_storage_buckets,
         }
 
+        LINKABLE_TYPES = {"assets", "queues", "storage_buckets"}
+
         if not resource_types:
             raise ValueError("resource_types cannot be empty")
 
@@ -313,6 +321,7 @@ class OrchestratorClient:
         if invalid:
             raise ValueError(f"Invalid resource_types: {invalid}")
 
+        # Step 1: Fetch requested resources
         tasks = {
             rt: VALID_RESOURCE_TYPES[rt](folder_id)
             for rt in resource_types
@@ -323,12 +332,24 @@ class OrchestratorClient:
         response: dict[str, list | dict] = {}
 
         for resource_type, result in zip(tasks.keys(), results):
+
             if isinstance(result, Exception):
                 response[resource_type] = {"error": str(result)}
-            else:
-                response[resource_type] = result or []
+                continue
+
+            items = result or []
+
+            # Automatically attach linked folders
+            if resource_type in LINKABLE_TYPES:
+                items = await self._attach_linked_folders(
+                    items,
+                    resource_type
+                )
+
+            response[resource_type] = items
 
         return response
+
 
     # -------------------------------------------------------------------------
     # Folder management
@@ -410,72 +431,6 @@ class OrchestratorClient:
 
         return current_folder
     
-    async def ensure_asset_local2(self,folder_path: str, asset_spec: dict) -> dict:
-
-        name = asset_spec.get("Name")
-        value_type = asset_spec.get("ValueType")
-        value = asset_spec.get("Value")
-
-        if not name or not value_type:
-            raise ValueError("Asset spec must include 'Name' and 'ValueType'")
-
-        folder = await self.ensure_folder_path(folder_path)
-        folder_id = folder["Id"]
-
-        assets = await self.get_assets(folder_id)
-
-        existing = next(
-            (a for a in assets if a["Name"] == name),
-            None
-        )
-
-        # ----------------------------------------------------------
-        # IF EXISTS → RETURN (NO UPDATE)
-        # ----------------------------------------------------------
-        if existing:
-            return existing
-
-        # ----------------------------------------------------------
-        # CREATE
-        # ----------------------------------------------------------
-        payload = {
-            "Name": name,
-            "ValueType": value_type,
-            "ValueScope": "Global",
-        }
-
-        if value_type == "Text":
-            payload["StringValue"] = value
-
-        elif value_type == "Bool":
-            payload["BoolValue"] = value
-
-        elif value_type == "Integer":
-            payload["IntValue"] = value
-
-        elif value_type == "Credential":
-
-            if not isinstance(value, dict):
-                raise ValueError("Credential Value must be dict with username/password")
-
-            username = value.get("username")
-            password = value.get("password")
-
-            if not username or not password:
-                raise ValueError("Credential requires username and password")
-
-            payload["CredentialUsername"] = username
-            payload["CredentialPassword"] = password
-
-        else:
-            raise ValueError(f"Unsupported ValueType: {value_type}")
-
-        return await self.post(
-            "odata/Assets",
-            payload,
-            folder_id=folder_id,
-        )
-
     async def ensure_asset_local(self,folder_path: str,asset_spec: dict) -> dict:
 
         name = asset_spec.get("Name")
@@ -538,10 +493,7 @@ class OrchestratorClient:
             folder_id=folder_id,
         )
 
-    async def attach_asset_linked_folders(
-        self,
-        assets: list[dict]
-    ) -> list[dict]:
+    
         """
         Given a list of asset objects, attach a new key:
         'LinkedFolders': [list of folder paths where asset is assigned]
@@ -569,7 +521,7 @@ class OrchestratorClient:
             fid = folder["Id"]
 
             try:
-                folder_assets = await self.get_assets(fid)
+                folder_assets = await self.get_queues(fid)
             except Exception:
                 continue  # skip inaccessible folders
 
@@ -593,6 +545,95 @@ class OrchestratorClient:
             )
 
             enhanced.append(enhanced_asset)
+
+        return enhanced
+
+    
+    async def _attach_linked_folders(
+        self,
+        items: List[dict],
+        resource_type: str,
+    ) -> List[dict]:
+        """
+        Optimized version:
+        - Fetch folder items concurrently
+        - Precompute folder paths once
+        - Only track relevant resource IDs
+        """
+
+        if not items:
+            return items
+
+        RESOURCE_GETTERS = {
+            "assets": self.get_assets,
+            "queues": self.get_queues,
+            "storage_buckets": self.get_storage_buckets,
+        }
+
+        if resource_type not in RESOURCE_GETTERS:
+            raise ValueError(f"Unsupported resource_type: {resource_type}")
+
+        getter = RESOURCE_GETTERS[resource_type]
+
+        # --------------------------------------------------
+        # Step 1: Fetch folders and build folder lookup
+        # --------------------------------------------------
+        all_folders = await self.get_folders()
+        by_id = {f["Id"]: f for f in all_folders}
+
+        # Precompute folder paths (avoid rebuilding repeatedly)
+        def build_path(fid: int) -> str:
+            parts = []
+            current = by_id.get(fid)
+            while current:
+                parts.append(current["DisplayName"])
+                current = by_id.get(current.get("ParentId"))
+            return "/".join(reversed(parts))
+
+        folder_paths = {
+            f["Id"]: build_path(f["Id"])
+            for f in all_folders
+        }
+
+        # --------------------------------------------------
+        # Step 2: Concurrently fetch items in all folders
+        # --------------------------------------------------
+        folder_ids = [f["Id"] for f in all_folders]
+        tasks = [getter(fid) for fid in folder_ids]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Only track IDs we actually care about
+        target_ids: Set[int] = {item["Id"] for item in items}
+
+        links: Dict[int, Set[str]] = {}
+
+        for fid, folder_items in zip(folder_ids, results):
+            if isinstance(folder_items, Exception):
+                continue
+
+            path = folder_paths[fid]
+
+            for item in folder_items:
+                rid = item["Id"]
+
+                if rid in target_ids:
+                    links.setdefault(rid, set()).add(path)
+
+        # --------------------------------------------------
+        # Step 3: Attach LinkedFolders
+        # --------------------------------------------------
+        enhanced = []
+
+        for item in items:
+            rid = item.get("Id")
+
+            enhanced_item = dict(item)
+            enhanced_item["LinkedFolders"] = sorted(
+                links.get(rid, [])
+            )
+
+            enhanced.append(enhanced_item)
 
         return enhanced
 
