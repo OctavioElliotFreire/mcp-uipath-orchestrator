@@ -245,9 +245,11 @@ class OrchestratorClient:
     async def get_processes(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/Releases", folder_id))
 
+ 
+    
     async def get_storage_buckets(self, folder_id: int) -> list[dict]:
-        return self._unwrap_odata(await self.get("odata/BucketDefinitions", folder_id))
-
+        return self._unwrap_odata(await self.get("odata/Buckets", folder_id))
+    
     async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
         return sorted(

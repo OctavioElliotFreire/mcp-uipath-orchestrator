@@ -20,11 +20,6 @@ def get_all_account_tenant_pairs() -> list[tuple[str, str]]:
             pairs.append((account, tenant))
     return pairs
 
-
-# -----------------------------------------------------------------------------
-# TEST 1: Authentication
-# -----------------------------------------------------------------------------
-
 async def test_connection():
     print("\n" + "=" * 60)
     print("TEST 1: Connection and Authentication")
@@ -52,11 +47,6 @@ async def test_connection():
 
     finally:
         await client.close()
-
-
-# -----------------------------------------------------------------------------
-# TEST 2: Get folders
-# -----------------------------------------------------------------------------
 
 async def test_get_folders_tree_multi_tenant():
     print("\n" + "=" * 60)
@@ -99,8 +89,6 @@ async def test_get_folders_tree_multi_tenant():
 
     return True
 
-
-
 async def test_get_folders_multi_tenant():
     print("\n" + "=" * 60)
     print("TEST 2: Get Folders (Multi-Account, Multi-Tenant)")
@@ -131,11 +119,6 @@ async def test_get_folders_multi_tenant():
             await client.close()
 
     return True
-
-
-# -----------------------------------------------------------------------------
-# TEST 3: Get assets
-# -----------------------------------------------------------------------------
 
 async def test_get_assets_multi_tenant():
     print("\n" + "=" * 60)
@@ -171,11 +154,6 @@ async def test_get_assets_multi_tenant():
 
     return True
 
-
-# -----------------------------------------------------------------------------
-# TEST 4–6: Queues / Triggers / Processes (pattern-based)
-# -----------------------------------------------------------------------------
-
 async def test_folder_collections(method_name: str, label: str):
     print("\n" + "=" * 60)
     print(f"TEST: {label}")
@@ -205,11 +183,6 @@ async def test_folder_collections(method_name: str, label: str):
             await client.close()
 
     return True
-
-
-# -----------------------------------------------------------------------------
-# TEST 7: Libraries → Versions
-# -----------------------------------------------------------------------------
 
 async def test_list_library_versions_flow():
     print("\n" + "=" * 60)
@@ -245,11 +218,6 @@ async def test_list_library_versions_flow():
 
     return True
 
-
-# -----------------------------------------------------------------------------
-# TEST 8: Download library
-# -----------------------------------------------------------------------------
-
 async def test_download_library_version():
     print("\n" + "=" * 60)
     print("TEST: Download Library Version")
@@ -284,11 +252,6 @@ async def test_download_library_version():
             await client.close()
 
     return True
-
-
-# -----------------------------------------------------------------------------
-# TEST 9: get_resources
-# -----------------------------------------------------------------------------
 
 async def test_get_resources():
     print("\n" + "=" * 60)
@@ -350,9 +313,6 @@ async def test_get_resources():
 
     finally:
         await client.close()
-# -----------------------------------------------------------------------------
-# TEST 10: Ensure_folder_path
-# -----------------------------------------------------------------------------
 
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
@@ -735,12 +695,6 @@ async def test_ensure_asset_local():
     finally:
         await client.close()
 
-
-
-# -----------------------------------------------------------------------------
-# TEST: _attach_linked_folders (assets, queues, storage_buckets)
-# -----------------------------------------------------------------------------
-
 async def test_attach_linked_folders_all_resources():
     print("\n" + "=" * 60)
     print("TEST: _attach_linked_folders() — assets, queues, buckets")
@@ -932,9 +886,10 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     #asyncio.run(test_get_resources())
+     asyncio.run(test_get_resources())
+     
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_asset_local())
      #asyncio.run(test_attach_asset_linked_folders())
      #asyncio.run(test_attach_linked_folders_all_resources())
-     asyncio.run(test_ensure_and_link_asset())
+     #asyncio.run(test_ensure_and_link_asset())
