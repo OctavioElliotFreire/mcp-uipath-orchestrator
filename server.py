@@ -83,24 +83,6 @@ async def list_tenants(account: str) -> list[dict]:
     ]
 
 
-@mcp.tool()
-async def list_folders_tree(account: str, tenant: str) -> list[dict]:
-    """
-    Returns the full folder hierarchy for a UiPath Orchestrator tenant.
-
-    The result is a nested tree structure where each folder includes a
-    "children" field containing its subfolders.
-
-    This tool is read-only and intended for structure discovery,
-    hierarchy inspection, and reasoning about existing folder layouts.
-
-    Important:
-    - Folders are tenant-scoped (not folder-scoped).
-    - No changes are made to the Orchestrator.
-    """
-    client = await get_client(account, tenant)
-    return await client.get_folders_tree()
-
 
 @mcp.tool()
 async def list_libraries(account: str, tenant: str) -> list[str]:
