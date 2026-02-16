@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import TypedDict
 import asyncio
 import asyncio
-from typing import List, Dict, Set
+from typing import List, Dict, Set,Optional
 import uuid 
+
+
 # -----------------------------------------------------------------------------
 # Configuration Types
 # -----------------------------------------------------------------------------
@@ -447,126 +449,42 @@ class OrchestratorClient:
         return response
 
 
-# -------------------------------------------------------------------------
-# Generic link tool (aligned with get_resources pattern)
-# -------------------------------------------------------------------------
-
-    async def link_resource_to_first_valid_folder2(
-        self,
-        resource_type: str,
-        resource_name: str,
-        candidate_folder_paths: list[str],
-        target_folder_path: str,
-        match_criteria: dict | None = None,
-    ) -> dict:
-
-        VALID_RESOURCE_TYPES = {
-            "assets": {
-                "getter": self.get_assets,
-                "endpoint": "odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
-                "id_field": "AssetIds",
-            },
-            "queues": {
-                "getter": self.get_queues,
-                "endpoint": "odata/QueueDefinitions/UiPath.Server.Configuration.OData.ShareToFolders",
-                "id_field": "QueueDefinitionIds",
-            },
-            "storage_buckets": {
-                "getter": self.get_storage_buckets,
-                "endpoint": "odata/Buckets/UiPath.Server.Configuration.OData.ShareToFolders",
-                "id_field": "BucketIds",
-            },
-        }
-
-        if resource_type not in VALID_RESOURCE_TYPES:
-            raise ValueError(f"Invalid resource_type: {resource_type}")
-
-        if not resource_name:
-            raise ValueError("resource_name is required")
-
-        if not candidate_folder_paths:
-            raise ValueError("candidate_folder_paths cannot be empty")
-
-        if not target_folder_path:
-            raise ValueError("target_folder_path is required")
-
-        config = VALID_RESOURCE_TYPES[resource_type]
-        getter = config["getter"]
-
-        # Resolve target folder
-        try:
-            target_folder = await self.ensure_folder_path(target_folder_path)
-        except Exception:
-            return {
-                "status": "not_linked",
-                "resource_id": None,
-                "linked_to": None,
-                "reason": "target_folder_not_found",
-            }
-
-        target_folder_id = target_folder["Id"]
-
-        # Iterate candidate folders
-        for folder_path in candidate_folder_paths:
-
-            try:
-                folder = await self.resolve_folder_path(folder_path)
-            except Exception:
-                continue
-
-            resources = await getter(folder["Id"])
-
-            for resource in resources:
-
-                if resource.get("Name") != resource_name:
-                    continue
-
-                if match_criteria:
-                    mismatch = any(
-                        resource.get(k) != v
-                        for k, v in match_criteria.items()
-                    )
-                    if mismatch:
-                        continue
-
-                payload = {
-                    config["id_field"]: [resource["Id"]],
-                    "toAddFolderIds": [target_folder_id],
-                    "toRemoveFolderIds": [],
-                }
-
-                try:
-                    await self.post(config["endpoint"], payload)
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code != 409:
-                        raise
-
-                return {
-                    "status": "linked",
-                    "resource_id": resource["Id"],
-                    "linked_to": target_folder_path,
-                    "reason": None,
-                }
-
-        return {
-            "status": "not_linked",
-            "resource_id": None,
-            "linked_to": None,
-            "reason": "no_matching_candidate_folder",
-        }
 
 # -------------------------------------------------------------------------
 # Generic cross-folder linker
 # -------------------------------------------------------------------------
 
-    async def link_resource_to_first_valid_folder(
+    async def link_resource_to_folder(
         self,
         resource_type: str,
         resource_name: str,
         candidate_folder_paths: list[str],
         target_folder_path: str,
-        match_criteria: dict | None = None,
+        expected_value_type: Optional[str] = None,
     ) -> dict:
+        """
+        Link an existing shared resource into a target folder.
+
+        This tool searches the provided candidate folders in order and links
+        the first matching resource into the target folder.
+
+        It does NOT create resources.
+        If no matching resource is found, nothing is linked.
+
+        Matching behavior:
+        - Resource is matched by Name.
+        - If resource_type == "assets" and expected_value_type is provided,
+            ValueType must also match.
+        - Stops after the first successful match.
+
+        Returns:
+        {
+            "status": "linked" | "not_linked",
+            "resource_id": int | null,
+            "linked_to": str | null,
+            "reason": str | null
+        }
+        """
 
         if resource_type not in self.RESOURCE_REGISTRY:
             raise ValueError(f"Unsupported resource_type: {resource_type}")
@@ -593,7 +511,7 @@ class OrchestratorClient:
         target_folder_id = target_folder["Id"]
         getter = getattr(self, config["getter"])
 
-        # Search candidate folders
+        # Search candidate folders in order
         for folder_path in candidate_folder_paths:
 
             try:
@@ -605,15 +523,13 @@ class OrchestratorClient:
 
             for resource in resources:
 
+                # 1️⃣ Match by Name
                 if resource.get("Name") != resource_name:
                     continue
 
-                if match_criteria:
-                    mismatch = any(
-                        resource.get(k) != v
-                        for k, v in match_criteria.items()
-                    )
-                    if mismatch:
+                # 2️⃣ If assets and expected_value_type provided, validate ValueType
+                if resource_type == "assets" and expected_value_type:
+                    if resource.get("ValueType") != expected_value_type:
                         continue
 
                 payload = {
@@ -625,6 +541,7 @@ class OrchestratorClient:
                 try:
                     await self.post(config["share_endpoint"], payload)
                 except httpx.HTTPStatusError as e:
+                    # 409 = already linked (safe to ignore)
                     if e.response.status_code != 409:
                         raise
 
@@ -747,88 +664,12 @@ class OrchestratorClient:
 
         return current_folder
     
-    async def ensure_asset_local(self,folder_path: str,asset_spec: dict) -> dict:
-        """
-        Ensure an asset exists in the specified folder.
-
-        Create-only policy:
-        - If asset exists → return it (no update).
-        - If not → create it.
-        - Credentials use environment-owned defaults.
-        """
-
-        name = asset_spec.get("Name")
-        value_type = asset_spec.get("ValueType")
-        value = asset_spec.get("Value")
-
-        if not name or not value_type:
-            raise ValueError("Asset spec must include 'Name' and 'ValueType'")
-
-        # Resolve folder (create if missing — this is intentional for ensure)
-        folder = await self.ensure_folder_path(folder_path)
-        folder_id = folder["Id"]
-
-        # Check if asset already exists in this folder
-        assets = await self.get_assets(folder_id)
-
-        existing = next(
-            (a for a in assets if a["Name"] == name),
-            None
-        )
-
-        # ----------------------------------------------------------
-        # IF EXISTS → RETURN (NO UPDATE)
-        # ----------------------------------------------------------
-        if existing:
-            return existing
-
-        # ----------------------------------------------------------
-        # CREATE NEW ASSET
-        # ----------------------------------------------------------
-        payload = {
-            "Name": name,
-            "ValueType": value_type,
-            "ValueScope": "Global",
-        }
-
-        if value_type == "Text":
-            payload["StringValue"] = value
-
-        elif value_type == "Bool":
-            payload["BoolValue"] = value
-
-        elif value_type == "Integer":
-            payload["IntValue"] = value
-
-        elif value_type == "Credential":
-
-            # Credentials are environment-owned.
-            # LLM must NOT provide secrets.
-            default_username = self._credential_defaults["username"]
-            default_password = self._credential_defaults["password"]
-
-            payload["CredentialUsername"] = default_username
-            payload["CredentialPassword"] = default_password
-
-        else:
-            raise ValueError(f"Unsupported ValueType: {value_type}")
-
-        return await self.post(
-            "odata/Assets",
-            payload,
-            folder_id=folder_id,
-        )
     
     # -------------------------------------------------------------------------
 # Ensure resource exists (create-only policy)
 # -------------------------------------------------------------------------
 
-    async def ensure_resource_local(
-        self,
-        resource_type: str,
-        folder_path: str,
-        resource_spec: dict,
-    ) -> dict:
+    async def ensure_resource_in_folder(self,resource_type: str,folder_path: str,resource_spec: dict) -> dict:
 
         if resource_type not in self.RESOURCE_REGISTRY:
             raise ValueError(f"Unsupported resource_type: {resource_type}")
@@ -865,175 +706,7 @@ class OrchestratorClient:
             payload,
             folder_id=folder_id,
         )
-
-    async def link_asset_to_first_valid_folder2(
-        self,
-        asset_name: str,
-        value_type: str,
-        candidate_folder_paths: list[str],
-        target_folder_path: str
-    ) -> dict:
-        """
-        Search candidate folders for an asset with given name + type.
-        If found, link that asset to target folder and stop.
-        If not found, return structured not_linked response.
-        """
-
-        if not asset_name:
-            raise ValueError("asset_name is required")
-
-        if not value_type:
-            raise ValueError("value_type is required")
-
-        if not candidate_folder_paths:
-            raise ValueError("candidate_folder_paths cannot be empty")
-
-        if not target_folder_path:
-            raise ValueError("target_folder_path is required")
-
-        
-        try:
-            target_folder = await self.ensure_folder_path(target_folder_path)
-        except Exception:
-            return {
-                "status": "not_linked",
-                "asset_id": None,
-                "linked_to": None,
-                "reason": "target_folder_not_found"
-            }
-
-        target_folder_id = target_folder["Id"]
-
-        # Iterate candidate folders
-        for folder_path in candidate_folder_paths:
-
-            try:
-                folder = await self.resolve_folder_path(folder_path)
-            except Exception:
-                continue  # skip non-existing folders
-
-            assets = await self.get_assets(folder["Id"])
-
-            for asset in assets:
-                if asset["Name"] == asset_name and asset["ValueType"] == value_type:
-
-                    payload = {
-                        "AssetIds": [asset["Id"]],
-                        "toAddFolderIds": [target_folder_id],
-                        "toRemoveFolderIds": []
-                    }
-
-                    try:
-                        await self.post(
-                            "odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
-                            payload
-                        )
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code != 409:
-                            raise
-
-                    return {
-                        "status": "linked",
-                        "asset_id": asset["Id"],
-                        "linked_to": target_folder_path,
-                        "reason": None
-                    }
-
-        # No matching asset found in any candidate folder
-        return {
-            "status": "not_linked",
-            "asset_id": None,
-            "linked_to": None,
-            "reason": "no_matching_candidate_folder"
-        }
-
-# -------------------------------------------------------------------------
-# Generic cross-folder linker
-# -------------------------------------------------------------------------
-
-    async def link_resource_to_first_valid_folder(
-        self,
-        resource_type: str,
-        resource_name: str,
-        candidate_folder_paths: list[str],
-        target_folder_path: str,
-        match_criteria: dict | None = None,
-    ) -> dict:
-
-        if resource_type not in self.RESOURCE_REGISTRY:
-            raise ValueError(f"Unsupported resource_type: {resource_type}")
-
-        if not resource_name:
-            raise ValueError("resource_name is required")
-
-        if not candidate_folder_paths:
-            raise ValueError("candidate_folder_paths cannot be empty")
-
-        config = self.RESOURCE_REGISTRY[resource_type]
-
-        # Resolve target folder
-        try:
-            target_folder = await self.ensure_folder_path(target_folder_path)
-        except Exception:
-            return {
-                "status": "not_linked",
-                "resource_id": None,
-                "linked_to": None,
-                "reason": "target_folder_not_found",
-            }
-
-        target_folder_id = target_folder["Id"]
-        getter = getattr(self, config["getter"])
-
-        # Search candidate folders
-        for folder_path in candidate_folder_paths:
-
-            try:
-                folder = await self.resolve_folder_path(folder_path)
-            except Exception:
-                continue
-
-            resources = await getter(folder["Id"])
-
-            for resource in resources:
-
-                if resource.get("Name") != resource_name:
-                    continue
-
-                if match_criteria:
-                    mismatch = any(
-                        resource.get(k) != v
-                        for k, v in match_criteria.items()
-                    )
-                    if mismatch:
-                        continue
-
-                payload = {
-                    config["id_field"]: [resource["Id"]],
-                    "toAddFolderIds": [target_folder_id],
-                    "toRemoveFolderIds": [],
-                }
-
-                try:
-                    await self.post(config["share_endpoint"], payload)
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code != 409:
-                        raise
-
-                return {
-                    "status": "linked",
-                    "resource_id": resource["Id"],
-                    "linked_to": target_folder_path,
-                    "reason": None,
-                }
-
-        return {
-            "status": "not_linked",
-            "resource_id": None,
-            "linked_to": None,
-            "reason": "no_matching_candidate_folder",
-        }
-
+    
 
     async def _attach_linked_folders(self,items: List[dict],resource_type: str) -> List[dict]:
         """

@@ -657,13 +657,13 @@ async def test_ensure_resources_local():
             print(f"ASSET CASE: {case['label']}")
             print("-" * 60)
 
-            asset1 = await client.ensure_resource_local(
+            asset1 = await client.ensure_resource_in_folder(
                 resource_type="assets",
                 folder_path=folder_path,
                 resource_spec=case["spec_create"],
             )
 
-            asset2 = await client.ensure_resource_local(
+            asset2 = await client.ensure_resource_in_folder(
                 resource_type="assets",
                 folder_path=folder_path,
                 resource_spec=case["spec_update"],
@@ -713,13 +713,13 @@ async def test_ensure_resources_local():
             "AcceptAutomaticallyRetry": True,
         }
 
-        q1 = await client.ensure_resource_local(
+        q1 = await client.ensure_resource_in_folder(
             resource_type="queues",
             folder_path=folder_path,
             resource_spec=queue_create,
         )
 
-        q2 = await client.ensure_resource_local(
+        q2 = await client.ensure_resource_in_folder(
             resource_type="queues",
             folder_path=folder_path,
             resource_spec=queue_update,
@@ -763,13 +763,13 @@ async def test_ensure_resources_local():
             "Description": "Should Not Update",
         }
 
-        b1 = await client.ensure_resource_local(
+        b1 = await client.ensure_resource_in_folder(
             resource_type="storage_buckets",
             folder_path=folder_path,
             resource_spec=bucket_create,
         )
 
-        b2 = await client.ensure_resource_local(
+        b2 = await client.ensure_resource_in_folder(
             resource_type="storage_buckets",
             folder_path=folder_path,
             resource_spec=bucket_update,
@@ -844,18 +844,18 @@ async def test_link_resources_to_first_valid_folder():
             "Value": "LINK_TEST",
         }
 
-        asset = await client.ensure_resource_local(
+        await client.ensure_resource_in_folder(
             resource_type="assets",
             folder_path=base_folder,
             resource_spec=asset_spec,
         )
 
-        result = await client.link_resource_to_first_valid_folder(
+        result = await client.link_resource_to_folder(
             resource_type="assets",
             resource_name=asset_spec["Name"],
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
-            match_criteria={"ValueType": asset_spec["ValueType"]},
+            expected_value_type=asset_spec["ValueType"],  # ✅ updated
         )
 
         if result["status"] != "linked":
@@ -881,13 +881,13 @@ async def test_link_resources_to_first_valid_folder():
             "Description": "Queue for linking test",
         }
 
-        queue = await client.ensure_resource_local(
+        await client.ensure_resource_in_folder(
             resource_type="queues",
             folder_path=base_folder,
             resource_spec=queue_spec,
         )
 
-        result = await client.link_resource_to_first_valid_folder(
+        result = await client.link_resource_to_folder(
             resource_type="queues",
             resource_name=queue_spec["Name"],
             candidate_folder_paths=candidate_folders,
@@ -916,13 +916,13 @@ async def test_link_resources_to_first_valid_folder():
             "Description": "Bucket for linking test",
         }
 
-        bucket = await client.ensure_resource_local(
+        await client.ensure_resource_in_folder(
             resource_type="storage_buckets",
             folder_path=base_folder,
             resource_spec=bucket_spec,
         )
 
-        result = await client.link_resource_to_first_valid_folder(
+        result = await client.link_resource_to_folder(
             resource_type="storage_buckets",
             resource_name=bucket_spec["Name"],
             candidate_folder_paths=candidate_folders,
@@ -946,11 +946,12 @@ async def test_link_resources_to_first_valid_folder():
         print("NOT LINKED CASE")
         print("-" * 60)
 
-        result = await client.link_resource_to_first_valid_folder(
+        result = await client.link_resource_to_folder(
             resource_type="assets",
             resource_name="NON_EXISTENT_RESOURCE",
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
+            expected_value_type="Text",
         )
 
         if result["status"] != "not_linked":

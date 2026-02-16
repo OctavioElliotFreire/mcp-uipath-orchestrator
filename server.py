@@ -10,6 +10,7 @@
 import json
 from mcp.server.fastmcp import FastMCP
 from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
+from typing import  Dict,Optional
 
 # -----------------------------------------------------------------------------
 # Client cache (one client per account/tenant, shared token)
@@ -184,55 +185,152 @@ async def download_library_version(account: str,tenant: str,package_id: str,vers
     )
     return str(path)
 
+@mcp.tool()
+async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str:
+    """
+    Ensure that a nested folder path exists in UiPath Orchestrator.
+
+    This tool is idempotent:
+      - If the folder path already exists, it is returned unchanged.
+      - If any segment is missing, it is created.
+      - No existing folders are modified.
+
+    Use this tool when:
+      - You need to guarantee folder structure before provisioning resources.
+      - You are performing declarative environment setup.
+
+    Parameters:
+      - account: Orchestrator account name.
+      - tenant: Orchestrator tenant name.
+      - folder_path: Folder path (e.g. "Finance/Prod/Invoices").
+
+    Returns:
+      {
+        "status": "ok" | "error",
+        "folder": {...},        # when successful
+        "message": "..."        # when error
+      }
+    """
+
+    client = await get_client(account, tenant)
+
+    try:
+        folder = await client.ensure_folder_path(folder_path)
+
+        return json.dumps({
+            "status": "ok",
+            "folder": folder
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
+
+
+from typing import Dict, Any
+import json
+
+
+@mcp.tool()
+async def ensure_resource_in_folder(
+    resource_type: str,
+    folder_path: str,
+    resource_spec: Dict[str, Any],
+    account: str,
+    tenant: str
+) -> str:
+    """
+    Ensure that a resource exists inside a specific folder.
+
+    This tool follows a create-only, idempotent policy:
+      - If a resource with the same Name already exists in the folder,
+        it is returned unchanged.
+      - If it does not exist, it is created.
+      - Existing resources are never updated or overwritten.
+    """
+
+    client = await get_client(account, tenant)
+
+    try:
+        resource = await client.ensure_resource_in_folder(
+            resource_type=resource_type,
+            folder_path=folder_path,
+            resource_spec=resource_spec,
+        )
+
+        return json.dumps({
+            "status": "ok",
+            "resource": resource
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
+
+
+
+@mcp.tool()
+async def link_resource_to_folder(resource_type: str, resource_name: str, candidate_folder_paths: list[str], target_folder_path: str, account: str, tenant: str, expected_value_type: Optional[str] = None) -> str:
+    """
+    Link an existing shared resource into a target folder.
+
+    This tool searches the provided candidate folders in order and links
+    the first matching resource into the target folder.
+
+    It does NOT create resources.
+    If no matching resource is found, nothing is linked.
+
+    Use this tool when:
+      - A resource already exists elsewhere.
+      - You want to reuse or share it.
+      - You want to avoid duplicating resources.
+
+    Matching behavior:
+      - Resource is matched by Name.
+      - If resource_type == "assets" and expected_value_type is provided,
+        ValueType must also match.
+      - Stops after the first successful match.
+
+    Parameters:
+      - resource_type: "assets", "queues", or "storage_buckets"
+      - resource_name: Name of the resource to locate.
+      - candidate_folder_paths: Ordered list of folders to search.
+      - target_folder_path: Folder to link the resource into.
+      - account: Orchestrator account name.
+      - tenant: Orchestrator tenant name.
+      - expected_value_type: Optional (assets only). Example: "Text", "Bool", "Integer"
+
+    Returns:
+      {
+        "status": "linked" | "not_linked",
+        "resource_id": int | null,
+        "linked_to": str | null,
+        "reason": str | null
+      }
+    """
+
+    client = await get_client(account, tenant)
+
+    result = await client.link_resource_to_folder(
+        resource_type=resource_type,
+        resource_name=resource_name,
+        candidate_folder_paths=candidate_folder_paths,
+        target_folder_path=target_folder_path,
+        expected_value_type=expected_value_type,
+    )
+
+    return json.dumps(result, indent=2)
+
+
+
 # -----------------------------------------------------------------------------
 # ACTION-SCOPED OPERATIONAL TOOLS
 # -----------------------------------------------------------------------------
 
-@mcp.tool()
-async def ensure_folder(
-    account: str,
-    tenant: str,
-    path: str,
-) -> dict:
-    """
-    Ensures that a folder path exists in a UiPath Orchestrator tenant.
-
-    The path may contain nested folders separated by "/"
-    (e.g. "Finance/Invoices/2025").
-
-    Behavior:
-    - Creates any missing parent folders automatically.
-    - Does nothing if the full path already exists.
-    - Returns the final (leaf) folder object.
-
-    This tool is idempotent and safe to call multiple times.
-
-    It does NOT modify permissions.
-    """
-
-    client = await get_client(account, tenant)
-    return await client.ensure_folder_path(path)
-
-@mcp.tool()
-async def ensure_asset(
-    account: str,
-    tenant: str,
-    folder_path: str,
-    asset_spec: dict,
-) -> dict:
-    """
-    Ensures a LOCAL asset exists in a folder and matches the provided specification.
-
-    Behavior:
-    - Creates the asset if missing.
-    - Updates it if values differ.
-    - Does nothing if already correct.
-
-    This tool does NOT manage linking or inheritance.
-    """
-
-    client = await get_client(account, tenant)
-    return await client.ensure_asset_local(folder_path, asset_spec)
 
 
 # -----------------------------------------------------------------------------
