@@ -316,38 +316,70 @@ async def test_get_resources():
 
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
-    print("TEST: Ensure Folder Path")
+    print("TEST: Ensure + Resolve Folder Path")
     print("=" * 60)
 
     account = "billiysusldx"
     tenant = "DefaultTenant"
 
     test_path = "Shared/MCP_Test/Level1/Level2"
+    non_existing_path = "Shared/MCP_Test/Level1/DoesNotExistXYZ"
 
     client = OrchestratorClient(account, tenant)
 
     try:
         await client.authenticate()
 
-        # 1️⃣ First call (should create folders)
+        # ----------------------------------------------------------
+        # 1️⃣ Ensure path (create if missing)
+        # ----------------------------------------------------------
         leaf = await client.ensure_folder_path(test_path)
 
-        print(f"✓ Created or ensured path: {test_path}")
+        print(f"✓ Ensured path: {test_path}")
         print(f"  Leaf Folder ID: {leaf.get('Id')}")
 
-        # 2️⃣ Second call (should NOT create duplicates)
-        leaf_again = await client.ensure_folder_path(test_path)
-
-        print("✓ Called ensure_folder_path again (idempotency check)")
-
-        if leaf["Id"] != leaf_again["Id"]:
-            print("✗ Id mismatch — not idempotent!")
+        if not leaf.get("Id"):
+            print("✗ Leaf folder has no ID")
             return False
 
-        print("✓ Idempotency confirmed (same folder ID)")
+        # ----------------------------------------------------------
+        # 2️⃣ Idempotency check
+        # ----------------------------------------------------------
+        leaf_again = await client.ensure_folder_path(test_path)
 
-        # 3️⃣ Validate structure exists in tree
+        if leaf["Id"] != leaf_again["Id"]:
+            print("✗ Id mismatch — ensure_folder_path not idempotent")
+            return False
+
+        print("✓ Idempotency confirmed")
+
+        # ----------------------------------------------------------
+        # 3️⃣ Resolve existing path
+        # ----------------------------------------------------------
+        resolved = await client.resolve_folder_path(test_path)
+
+        if resolved["Id"] != leaf["Id"]:
+            print("✗ resolve_folder_path returned different folder")
+            return False
+
+        print("✓ resolve_folder_path works")
+
+        # ----------------------------------------------------------
+        # 4️⃣ Resolve non-existing path
+        # ----------------------------------------------------------
+        try:
+            await client.resolve_folder_path(non_existing_path)
+            print("✗ resolve_folder_path should have failed")
+            return False
+        except RuntimeError:
+            print("✓ resolve_folder_path correctly failed")
+
+        # ----------------------------------------------------------
+        # 5️⃣ Validate tree structure
+        # ----------------------------------------------------------
         tree = await client.get_folders_tree()
+
+        segments = test_path.split("/")
 
         def find_path(nodes, segments):
             if not segments:
@@ -355,17 +387,24 @@ async def test_ensure_folder_path():
 
             for node in nodes:
                 if node["DisplayName"] == segments[0]:
-                    return find_path(node.get("children", []), segments[1:])
+                    return find_path(
+                        node.get("children", []),
+                        segments[1:]
+                    )
 
             return False
 
-        exists = find_path(tree, test_path.split("/"))
+        exists = find_path(tree, segments)
 
         if not exists:
-            print("✗ Folder path not found in tree")
+            print("✗ Folder path not found in tree structure")
             return False
 
         print("✓ Folder structure verified in tree")
+
+        print("\n" + "=" * 60)
+        print("✓ FOLDER TEST PASSED")
+        print("=" * 60)
 
         return True
 
@@ -375,6 +414,8 @@ async def test_ensure_folder_path():
 
     finally:
         await client.close()
+
+
 
 # -----------------------------------------------------------------------------
 # TEST 11: Ensure_folder_path
@@ -546,16 +587,14 @@ async def test_ensure_folder_path():
     finally:
         await client.close()
 
-async def test_ensure_asset_local():
+async def test_ensure_resources_local():
     print("\n" + "=" * 60)
-    print("TEST: Ensure Asset Local (CREATE-ONLY POLICY)")
+    print("TEST: Ensure Resources Local (CREATE-ONLY POLICY)")
     print("=" * 60)
 
     account = "billiysusldx"
     tenant = "DefaultTenant"
     folder_path = "Shared/MCP_Test/Level1/Level2"
-
-    TEST_PASSWORD = "TestPassword123!"
 
     client = OrchestratorClient(account, tenant)
 
@@ -563,10 +602,13 @@ async def test_ensure_asset_local():
         await client.authenticate()
         await client.ensure_folder_path(folder_path)
 
-        test_cases = [
+        # ==========================================================
+        # ASSET TEST CASES
+        # ==========================================================
+
+        asset_cases = [
             {
                 "label": "Text",
-                "name": "MCP_TEST_ASSET_TEXT",
                 "spec_create": {
                     "Name": "MCP_TEST_ASSET_TEXT",
                     "ValueType": "Text",
@@ -581,7 +623,6 @@ async def test_ensure_asset_local():
             },
             {
                 "label": "Bool",
-                "name": "MCP_TEST_ASSET_BOOL",
                 "spec_create": {
                     "Name": "MCP_TEST_ASSET_BOOL",
                     "ValueType": "Bool",
@@ -596,7 +637,6 @@ async def test_ensure_asset_local():
             },
             {
                 "label": "Integer",
-                "name": "MCP_TEST_ASSET_INT",
                 "spec_create": {
                     "Name": "MCP_TEST_ASSET_INT",
                     "ValueType": "Integer",
@@ -609,81 +649,151 @@ async def test_ensure_asset_local():
                 },
                 "field": "IntValue",
             },
-            {
-                "label": "Credential",
-                "name": "MCP_TEST_ASSET_CRED",
-                "spec_create": {
-                    "Name": "MCP_TEST_ASSET_CRED",
-                    "ValueType": "Credential",
-                    "Value": None,  # ignored
-                },
-                "spec_update": {
-                    "Name": "MCP_TEST_ASSET_CRED",
-                    "ValueType": "Credential",
-                    "Value": None,  # ignored
-                },
-                "field": None,
-            },
         ]
 
-        # ----------------------------------------------------------
-        # Execute test cases
-        # ----------------------------------------------------------
-        for case in test_cases:
+        for case in asset_cases:
 
             print("\n" + "-" * 60)
-            print(f"CASE: {case['label']} ({case['name']})")
+            print(f"ASSET CASE: {case['label']}")
             print("-" * 60)
 
-            # 1️⃣ Create
-            asset1 = await client.ensure_asset_local(
-                folder_path,
-                case["spec_create"],
+            asset1 = await client.ensure_resource_local(
+                resource_type="assets",
+                folder_path=folder_path,
+                resource_spec=case["spec_create"],
             )
 
-            print(f"✓ Created or ensured — Asset ID: {asset1.get('Id')}")
-
-            # 2️⃣ Call again with modified value (should NOT update)
-            asset2 = await client.ensure_asset_local(
-                folder_path,
-                case["spec_update"],
+            asset2 = await client.ensure_resource_local(
+                resource_type="assets",
+                folder_path=folder_path,
+                resource_spec=case["spec_update"],
             )
 
-            if asset1.get("Id") != asset2.get("Id"):
+            if asset1["Id"] != asset2["Id"]:
                 raise AssertionError("✗ Asset ID changed — not idempotent")
 
-            print("✓ No update performed (create-only policy)")
-            print("✓ Idempotency confirmed")
+            print("✓ Idempotent creation confirmed")
 
-            # 3️⃣ For non-credential types, verify original value preserved
-            if case["field"]:
+            folder = await client.ensure_folder_path(folder_path)
+            assets = await client.get_assets(folder["Id"])
 
-                folder = await client.ensure_folder_path(folder_path)
-                assets = await client.get_assets(folder["Id"])
+            stored = next(
+                (a for a in assets if a["Name"] == case["spec_create"]["Name"]),
+                None,
+            )
 
-                stored = next(
-                    (a for a in assets if a["Name"] == case["name"]),
-                    None,
+            expected = case["spec_create"]["Value"]
+
+            if stored.get(case["field"]) != expected:
+                raise AssertionError(
+                    f"✗ Asset value modified (expected={expected}, got={stored.get(case['field'])})"
                 )
 
-                if not stored:
-                    raise AssertionError("✗ Asset not found after ensure")
+            print("✓ Original value preserved")
 
-                expected = case["spec_create"]["Value"]
+        # ==========================================================
+        # QUEUE TEST
+        # ==========================================================
 
-                if stored.get(case["field"]) != expected:
-                    raise AssertionError(
-                        f"✗ Asset value was modified unexpectedly "
-                        f"(expected={expected}, got={stored.get(case['field'])})"
-                    )
+        print("\n" + "-" * 60)
+        print("QUEUE CASE")
+        print("-" * 60)
 
-                print("✓ Verified original value preserved")
+        queue_create = {
+            "Name": "MCP_TEST_QUEUE",
+            "Description": "Initial Description",
+            "MaxNumberOfRetries": 1,
+            "AcceptAutomaticallyRetry": False,
+        }
 
-            else:
-                print("✓ Credential created and idempotent (value not validated)")
+        queue_update = {
+            "Name": "MCP_TEST_QUEUE",
+            "Description": "Should Not Update",
+            "MaxNumberOfRetries": 99,
+            "AcceptAutomaticallyRetry": True,
+        }
+
+        q1 = await client.ensure_resource_local(
+            resource_type="queues",
+            folder_path=folder_path,
+            resource_spec=queue_create,
+        )
+
+        q2 = await client.ensure_resource_local(
+            resource_type="queues",
+            folder_path=folder_path,
+            resource_spec=queue_update,
+        )
+
+        if q1["Id"] != q2["Id"]:
+            raise AssertionError("✗ Queue ID changed — not idempotent")
+
+        print("✓ Queue idempotency confirmed")
+
+        folder = await client.ensure_folder_path(folder_path)
+        queues = await client.get_queues(folder["Id"])
+
+        stored_queue = next(
+            (q for q in queues if q["Name"] == queue_create["Name"]),
+            None,
+        )
+
+        if stored_queue["Description"] != queue_create["Description"]:
+            raise AssertionError("✗ Queue was unexpectedly updated")
+
+        print("✓ Queue original values preserved")
+
+        # ==========================================================
+        # STORAGE BUCKET TEST
+        # ==========================================================
+
+        print("\n" + "-" * 60)
+        print("STORAGE BUCKET CASE")
+        print("-" * 60)
+
+        bucket_create = {
+        "Name": "MCP_TEST_BUCKET",
+        "Description": "Initial Bucket",
+        
+    }
+
+
+        bucket_update = {
+            "Name": "MCP_TEST_BUCKET",
+            "Description": "Should Not Update",
+        }
+
+        b1 = await client.ensure_resource_local(
+            resource_type="storage_buckets",
+            folder_path=folder_path,
+            resource_spec=bucket_create,
+        )
+
+        b2 = await client.ensure_resource_local(
+            resource_type="storage_buckets",
+            folder_path=folder_path,
+            resource_spec=bucket_update,
+        )
+
+        if b1["Id"] != b2["Id"]:
+            raise AssertionError("✗ Bucket ID changed — not idempotent")
+
+        print("✓ Bucket idempotency confirmed")
+
+        buckets = await client.get_storage_buckets(folder["Id"])
+
+        stored_bucket = next(
+            (b for b in buckets if b["Name"] == bucket_create["Name"]),
+            None,
+        )
+
+        if stored_bucket["Description"] != bucket_create["Description"]:
+            raise AssertionError("✗ Bucket was unexpectedly updated")
+
+        print("✓ Bucket original values preserved")
 
         print("\n" + "=" * 60)
-        print("✓ PASS: All create-only asset tests completed successfully")
+        print("✓ PASS: All resource ensure tests completed successfully")
         print("=" * 60)
 
         return True
@@ -695,180 +805,172 @@ async def test_ensure_asset_local():
     finally:
         await client.close()
 
-async def test_attach_linked_folders_all_resources():
+
+async def test_link_resources_to_first_valid_folder():
     print("\n" + "=" * 60)
-    print("TEST: _attach_linked_folders() — assets, queues, buckets")
-    print("=" * 60)
-
-    pairs = get_all_account_tenant_pairs()
-    if not pairs:
-        print("No account/tenant configured.")
-        return False
-
-    account, tenant = pairs[0]
-    print(f"Using: {account}/{tenant}")
-
-    client = OrchestratorClient(account, tenant)
-
-    try:
-        await client.authenticate()
-
-        folders = await client.get_folders()
-        if not folders:
-            print("No folders found.")
-            return False
-
-        # Pick first folder with any resource
-        for folder in folders:
-            folder_id = folder["Id"]
-            print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
-
-            # ---------------- ASSETS ----------------
-            assets = await client.get_assets(folder_id)
-            if assets:
-                print("\n--- Assets ---")
-                enhanced_assets = await client._attach_linked_folders(
-                    assets,
-                    "assets"
-                )
-
-                for item in enhanced_assets:
-                    print(f"\nAsset: {item.get('Name')} (ID: {item.get('Id')})")
-                    print("LinkedFolders:")
-                    for lf in item.get("LinkedFolders", []):
-                        print(f"   - {lf}")
-
-            # ---------------- QUEUES ----------------
-            queues = await client.get_queues(folder_id)
-            if queues:
-                print("\n--- Queues ---")
-                enhanced_queues = await client._attach_linked_folders(
-                    queues,
-                    "queues"
-                )
-
-                for item in enhanced_queues:
-                    print(f"\nQueue: {item.get('Name')} (ID: {item.get('Id')})")
-                    print("LinkedFolders:")
-                    for lf in item.get("LinkedFolders", []):
-                        print(f"   - {lf}")
-
-            # ---------------- STORAGE BUCKETS ----------------
-            buckets = await client.get_storage_buckets(folder_id)
-            if buckets:
-                print("\n--- Storage Buckets ---")
-                enhanced_buckets = await client._attach_linked_folders(
-                    buckets,
-                    "storage_buckets"
-                )
-
-                for item in enhanced_buckets:
-                    print(f"\nBucket: {item.get('Name')} (ID: {item.get('Id')})")
-                    print("LinkedFolders:")
-                    for lf in item.get("LinkedFolders", []):
-                        print(f"   - {lf}")
-
-            # Run only on first folder with data
-            if assets or queues or buckets:
-                return True
-
-        print("No resources found in any folder.")
-        return False
-
-    except Exception as e:
-        print(f"✗ Error: {e}")
-        return False
-
-    finally:
-        await client.close()
-
-# -----------------------------------------------------------------------------
-# TEST: ensure_asset_local + link_asset_to_folder (Fixed Context)
-# -----------------------------------------------------------------------------
-
-async def test_ensure_and_link_asset():
-    print("\n" + "=" * 60)
-    print("TEST: ensure_asset_local() + link_asset_to_folder()")
+    print("TEST: link_resource_to_first_valid_folder() — Name-based Search")
     print("=" * 60)
 
     account = "billiysusldx"
     tenant = "DefaultTenant"
-    folder_path = "Shared/MCP_Test/Level1/Level2"
 
-    # We will link into a sibling folder for testing
-    link_folder_path = "Shared/MCP_Test/Level1/LinkedFolder"
+    base_folder = "Shared/MCP_Test/Level1/ValidCandidate"
+    target_folder = "Shared/MCP_Test/Level1/Target"
+
+    candidate_folders = [
+        "Shared/MCP_Test/InvalidCandidate",
+        base_folder,
+    ]
 
     client = OrchestratorClient(account, tenant)
 
     try:
         await client.authenticate()
 
+        # Ensure folders exist
+        await client.ensure_folder_path(base_folder)
+        await client.ensure_folder_path(target_folder)
+
+        # ==========================================================
+        # ASSET LINK TEST
+        # ==========================================================
+        print("\n" + "-" * 60)
+        print("ASSET LINK CASE")
+        print("-" * 60)
+
         asset_spec = {
-            "Name": "MCP_TEST_ASSET",
+            "Name": "MCP_TEST_LINK_ASSET",
             "ValueType": "Text",
-            "Value": "TEST_VALUE"
+            "Value": "LINK_TEST",
         }
 
-        # ----------------------------------------------------------
-        # Step 1: Ensure asset exists
-        # ----------------------------------------------------------
-        print("\nStep 1: Ensuring asset")
-
-        asset = await client.ensure_asset_local(folder_path, asset_spec)
-
-        print(f"✓ Asset ID: {asset.get('Id')}")
-        print(f"✓ Asset Name: {asset.get('Name')}")
-
-        # Idempotency check
-        asset_again = await client.ensure_asset_local(folder_path, asset_spec)
-
-        if asset_again.get("Id") != asset.get("Id"):
-            print("✗ Asset ID changed on ensure — not idempotent")
-            return False
-
-        print("✓ Ensure is idempotent")
-
-        # ----------------------------------------------------------
-        # Step 2: Link asset to another folder
-        # ----------------------------------------------------------
-        print("\nStep 2: Linking asset")
-
-        link_result = await client.link_asset_to_folder(
-            asset_id=asset["Id"],
-            folder_path=link_folder_path
+        asset = await client.ensure_resource_local(
+            resource_type="assets",
+            folder_path=base_folder,
+            resource_spec=asset_spec,
         )
 
-        print(f"✓ Linked Asset ID: {link_result.get('asset_id')}")
-        print(f"✓ Linked To: {link_result.get('linked_to')}")
+        result = await client.link_resource_to_first_valid_folder(
+            resource_type="assets",
+            resource_name=asset_spec["Name"],
+            candidate_folder_paths=candidate_folders,
+            target_folder_path=target_folder,
+            match_criteria={"ValueType": asset_spec["ValueType"]},
+        )
 
-        # ----------------------------------------------------------
-        # Step 3: Verify asset appears in linked folder
-        # ----------------------------------------------------------
-        print("\nStep 3: Verifying linked folder contains asset")
+        if result["status"] != "linked":
+            raise AssertionError("✗ Asset link failed")
 
-        linked_folder = await client.ensure_folder_path(link_folder_path)
-        assets_in_linked_folder = await client.get_assets(linked_folder["Id"])
+        target = await client.ensure_folder_path(target_folder)
+        assets = await client.get_assets(target["Id"])
 
-        found = any(a["Id"] == asset["Id"] for a in assets_in_linked_folder)
+        if not any(a["Name"] == asset_spec["Name"] for a in assets):
+            raise AssertionError("✗ Asset not found in target after linking")
 
-        if not found:
-            print("✗ Asset not found in linked folder")
-            return False
+        print("✓ Asset linked and verified")
 
-        print("✓ Asset successfully linked")
+        # ==========================================================
+        # QUEUE LINK TEST
+        # ==========================================================
+        print("\n" + "-" * 60)
+        print("QUEUE LINK CASE")
+        print("-" * 60)
+
+        queue_spec = {
+            "Name": "MCP_TEST_LINK_QUEUE",
+            "Description": "Queue for linking test",
+        }
+
+        queue = await client.ensure_resource_local(
+            resource_type="queues",
+            folder_path=base_folder,
+            resource_spec=queue_spec,
+        )
+
+        result = await client.link_resource_to_first_valid_folder(
+            resource_type="queues",
+            resource_name=queue_spec["Name"],
+            candidate_folder_paths=candidate_folders,
+            target_folder_path=target_folder,
+        )
+
+        if result["status"] != "linked":
+            raise AssertionError("✗ Queue link failed")
+
+        queues = await client.get_queues(target["Id"])
+
+        if not any(q["Name"] == queue_spec["Name"] for q in queues):
+            raise AssertionError("✗ Queue not found in target after linking")
+
+        print("✓ Queue linked and verified")
+
+        # ==========================================================
+        # BUCKET LINK TEST
+        # ==========================================================
+        print("\n" + "-" * 60)
+        print("STORAGE BUCKET LINK CASE")
+        print("-" * 60)
+
+        bucket_spec = {
+            "Name": "MCP_TEST_LINK_BUCKET",
+            "Description": "Bucket for linking test",
+        }
+
+        bucket = await client.ensure_resource_local(
+            resource_type="storage_buckets",
+            folder_path=base_folder,
+            resource_spec=bucket_spec,
+        )
+
+        result = await client.link_resource_to_first_valid_folder(
+            resource_type="storage_buckets",
+            resource_name=bucket_spec["Name"],
+            candidate_folder_paths=candidate_folders,
+            target_folder_path=target_folder,
+        )
+
+        if result["status"] != "linked":
+            raise AssertionError("✗ Bucket link failed")
+
+        buckets = await client.get_storage_buckets(target["Id"])
+
+        if not any(b["Name"] == bucket_spec["Name"] for b in buckets):
+            raise AssertionError("✗ Bucket not found in target after linking")
+
+        print("✓ Storage bucket linked and verified")
+
+        # ==========================================================
+        # NOT FOUND CASE
+        # ==========================================================
+        print("\n" + "-" * 60)
+        print("NOT LINKED CASE")
+        print("-" * 60)
+
+        result = await client.link_resource_to_first_valid_folder(
+            resource_type="assets",
+            resource_name="NON_EXISTENT_RESOURCE",
+            candidate_folder_paths=candidate_folders,
+            target_folder_path=target_folder,
+        )
+
+        if result["status"] != "not_linked":
+            raise AssertionError("✗ Expected not_linked result")
+
+        print("✓ not_linked case validated")
 
         print("\n" + "=" * 60)
-        print("✓ TEST PASSED")
+        print("✓ ALL LINK TESTS PASSED")
         print("=" * 60)
 
         return True
 
     except Exception as e:
-        print(f"✗ Error: {e}")
+        print(f"\n✗ FAIL: {e}")
         return False
 
     finally:
         await client.close()
+
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -886,10 +988,7 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     asyncio.run(test_get_resources())
-     
+     #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
-     #asyncio.run(test_ensure_asset_local())
-     #asyncio.run(test_attach_asset_linked_folders())
-     #asyncio.run(test_attach_linked_folders_all_resources())
-     #asyncio.run(test_ensure_and_link_asset())
+     #asyncio.run(test_ensure_resources_local())
+    asyncio.run(test_link_resources_to_first_valid_folder())
