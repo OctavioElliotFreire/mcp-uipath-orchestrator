@@ -2,12 +2,11 @@ import os
 import json
 import httpx
 from pathlib import Path
-from typing import TypedDict
 import asyncio
-import asyncio
-from typing import List, Dict, Set,Optional
+from typing import List, Dict, Set,Optional,TypedDict
 import uuid 
-
+from enum import Enum
+from datetime import datetime, timezone, timedelta
 
 # -----------------------------------------------------------------------------
 # Configuration Types
@@ -31,6 +30,18 @@ class AccountConfig(TypedDict):
 
 class Config(TypedDict):
     accounts: dict[str, AccountConfig]
+
+# ==========================================================
+# ENUMS
+# ==========================================================
+
+class QueueItemStatus(str, Enum):
+    New = "New"
+    InProgress = "InProgress"
+    Failed = "Failed"
+    Successful = "Successful"
+    Retried = "Retried"
+    Abandoned = "Abandoned"
 
 
 # -------------------------------------------------------------------------
@@ -109,6 +120,11 @@ class OrchestratorClient:
             "payload_builder": "_build_storage_bucket_payload",
         },
 }
+
+        # ----------------------------------------
+    
+    
+
 
     def __init__(self, account: str, tenant: str):
         if account not in CONFIG["accounts"]:
@@ -272,6 +288,92 @@ class OrchestratorClient:
     async def get_queues(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
 
+
+    def _to_uipath_datetime(self, dt: datetime) -> str:
+        """
+        Convert datetime to UiPath OData v4 accepted format:
+        yyyy-MM-ddTHH:mm:ssZ
+        - UTC timezone indicated by Z suffix
+        - No microseconds
+        - No datetime'' wrapper (that's OData v3)
+        """
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+
+        dt = dt.replace(microsecond=0)
+
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+    async def get_queue_items(
+        self,
+        queue_id: int,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        statuses: Optional[List[QueueItemStatus]] = None,
+        reference: Optional[str] = None,
+    ) -> List[Dict]:
+
+        if not queue_id:
+            raise ValueError("queue_id is required")
+
+        # --------------------------------------------------
+        # Cloud-safe: enforce date window
+        # --------------------------------------------------
+        if not start_time and not end_time:
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=30)
+
+        filters = [f"QueueDefinitionId eq {queue_id}"]
+
+        if start_time:
+            filters.append(
+                f"CreationTime ge {self._to_uipath_datetime(start_time)}"
+            )
+
+        if end_time:
+            filters.append(
+                f"CreationTime lt {self._to_uipath_datetime(end_time)}"
+            )
+
+        if statuses:
+            if len(statuses) == 1:
+                filters.append(f"Status eq '{statuses[0].value}'")
+            else:
+                status_filter = " or ".join(
+                    [f"Status eq '{s.value}'" for s in statuses]
+                )
+                filters.append(f"({status_filter})")
+
+        if reference:
+            filters.append(f"Reference eq '{reference}'")
+
+        filter_query = " and ".join(filters)
+
+        skip = 0
+        all_items: List[Dict] = []
+        PAGE_SIZE = 100
+
+        while True:
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$skip={skip}"
+                f"&$filter={filter_query}"
+            )
+
+            response = await self.get(endpoint)
+            items = self._unwrap_odata(response)
+            all_items.extend(items)
+
+            if reference:
+                break
+
+            if len(items) < PAGE_SIZE:
+                break
+
+            skip += PAGE_SIZE
+
+        return all_items
     async def get_triggers(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
 
@@ -326,7 +428,6 @@ class OrchestratorClient:
         path.write_bytes(file_response.content)
 
         return path
-
 
     async def get_storage_files(self,folder_id: int,bucket_id: int) -> list[dict]:
         """
@@ -438,6 +539,7 @@ class OrchestratorClient:
         """
         Convert flat UiPath folder list into nested tree structure.
         Preserves all original fields and adds 'children'.
+        This should help the llm to "understand" the structure in a more natural way
         """
 
         # Create copy of folders indexed by Id
@@ -470,8 +572,6 @@ class OrchestratorClient:
         """
         folders = await self.get_folders()
         return self._build_folder_tree(folders)
-
-    
     
     # -------------------------------------------------------------------------
     # Consolidated folder-scoped resource fetch
@@ -676,7 +776,6 @@ class OrchestratorClient:
 
         return current_folder
 
-   
     async def create_folder(self,new_folder_name: str,parent_id: int | None = None,description: str | None = None) -> dict:
         """
         Create a modern folder in the current tenant.
@@ -784,7 +883,6 @@ class OrchestratorClient:
             folder_id=folder_id,
         )
     
-
     async def _attach_linked_folders(self,items: List[dict],resource_type: str) -> List[dict]:
         """
         Optimized version:

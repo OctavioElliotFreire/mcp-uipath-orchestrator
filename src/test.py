@@ -7,6 +7,9 @@ Uncomment the test you want to run at the bottom
 import json
 import asyncio
 from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
+import json
+from datetime import datetime, timezone, timedelta
+from service import OrchestratorClient, QueueItemStatus
 
 
 # -----------------------------------------------------------------------------
@@ -79,71 +82,6 @@ async def test_get_folders_tree_multi_tenant():
 
             if tree:
                 print_tree(tree)
-
-        except Exception as e:
-            print(f"✗ {key}: {e}")
-            return False
-
-        finally:
-            await client.close()
-
-    return True
-
-async def test_get_folders_multi_tenant():
-    print("\n" + "=" * 60)
-    print("TEST 2: Get Folders (Multi-Account, Multi-Tenant)")
-    print("=" * 60)
-
-    for account, tenant in get_all_account_tenant_pairs():
-        key = f"{account}/{tenant}"
-        client = OrchestratorClient(account, tenant)
-
-        try:
-            await client.authenticate()
-            folders = await client.get_folders()
-
-            print(f"✓ {key}: {len(folders)} folders")
-
-            if folders:
-                sample = folders[0]
-                print(
-                    f"  Sample: {sample.get('DisplayName')} "
-                    f"(ID: {sample.get('Id')})"
-                )
-
-        except Exception as e:
-            print(f"✗ {key}: {e}")
-            return False
-
-        finally:
-            await client.close()
-
-    return True
-
-async def test_get_assets_multi_tenant():
-    print("\n" + "=" * 60)
-    print("TEST 3: Get Assets")
-    print("=" * 60)
-
-    for account, tenant in get_all_account_tenant_pairs():
-        key = f"{account}/{tenant}"
-        client = OrchestratorClient(account, tenant)
-
-        try:
-            await client.authenticate()
-            folders = await client.get_folders()
-
-            if not folders:
-                print(f"⚠ {key}: No folders")
-                continue
-
-            folder = folders[0]
-            assets = await client.get_assets(folder["Id"])
-
-            print(
-                f"✓ {key}: {len(assets)} assets "
-                f"in '{folder['DisplayName']}'"
-            )
 
         except Exception as e:
             print(f"✗ {key}: {e}")
@@ -314,6 +252,156 @@ async def test_get_resources():
     finally:
         await client.close()
 
+async def test_get_queue_items():
+    print("\n" + "=" * 60)
+    print("TEST: get_queue_items() — FULL OUTPUT")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    key = f"{account}/{tenant}"
+    print(f"Using: {key}")
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        folders = await client.get_folders()
+
+        if not folders:
+            print("No folders found.")
+            return False
+
+        folder = folders[0]
+        folder_id = folder["Id"]
+
+        print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
+
+        queues = await client.get_queues(folder_id)
+
+        if not queues:
+            print("No queues found.")
+            return False
+
+        queue = queues[0]
+        queue_id = queue["Id"]
+
+        print(f"🎯 Queue: {queue['Name']} ({queue_id})")
+
+        # ----------------------------------------------------
+        # 1️⃣ Basic fetch (no filters)
+        # ----------------------------------------------------
+        print("\n" + "-" * 50)
+        print("CASE 1: Basic fetch (no filters)")
+        print("-" * 50)
+
+        items = await client.get_queue_items(            
+            queue_id=queue_id,
+        )
+
+        print(f"Returned {len(items)} items")
+        for idx, item in enumerate(items[:5], 1):
+            print(f"\nItem #{idx}:")
+            print(json.dumps(item, indent=4, default=str))
+
+        # ----------------------------------------------------
+        # 2️⃣ Single status
+        # ----------------------------------------------------
+        print("\n" + "-" * 50)
+        print("CASE 2: Single status filter (Failed)")
+        print("-" * 50)
+
+        items = await client.get_queue_items(
+            queue_id=queue_id,
+            statuses=[QueueItemStatus.Failed],
+        )
+
+        print(f"Returned {len(items)} Failed items")
+
+        # ----------------------------------------------------
+        # 3️⃣ Multiple statuses
+        # ----------------------------------------------------
+        print("\n" + "-" * 50)
+        print("CASE 3: Multiple statuses (Failed, Abandoned)")
+        print("-" * 50)
+
+        items = await client.get_queue_items(
+            queue_id=queue_id,
+            statuses=[
+                QueueItemStatus.Failed,
+                QueueItemStatus.Abandoned,
+            ],
+        )
+
+        print(f"Returned {len(items)} Failed/Abandoned items")
+
+        # ----------------------------------------------------
+        # 4️⃣ Date range filter (last 7 days)
+        # ----------------------------------------------------
+        print("\n" + "-" * 50)
+        print("CASE 4: Date range (last 7 days)")
+        print("-" * 50)
+
+        now = datetime.now(timezone.utc)
+        seven_days_ago = now - timedelta(days=7)
+
+        items = await client.get_queue_items(
+            queue_id=queue_id,
+            start_time=seven_days_ago,
+            end_time=now,
+        )
+
+        print(f"Returned {len(items)} items in last 7 days")
+
+        # ----------------------------------------------------
+        # 5️⃣ Reference lookup (if items exist)
+        # ----------------------------------------------------
+        if items:
+            reference = items[0].get("Reference")
+
+            if reference:
+                print("\n" + "-" * 50)
+                print(f"CASE 5: Reference lookup ({reference})")
+                print("-" * 50)
+
+                ref_items = await client.get_queue_items(
+                    queue_id=queue_id,
+                    reference=reference,
+                )
+
+                print(f"Returned {len(ref_items)} item(s)")
+                print(json.dumps(ref_items[0], indent=4, default=str))
+
+        # ----------------------------------------------------
+        # 6️⃣ Validation test (missing queue_id)
+        # ----------------------------------------------------
+        print("\n" + "-" * 50)
+        print("CASE 6: Validation error (missing queue_id)")
+        print("-" * 50)
+
+        try:
+            await client.get_queue_items(
+                    queue_id=None,
+            )
+        except Exception as e:
+            print(f"✓ Expected error: {e}")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
     print("TEST: Ensure + Resolve Folder Path")
@@ -410,178 +498,6 @@ async def test_ensure_folder_path():
 
     except Exception as e:
         print(f"✗ Test failed: {e}")
-        return False
-
-    finally:
-        await client.close()
-
-
-
-# -----------------------------------------------------------------------------
-# TEST 11: Ensure_folder_path
-# -----------------------------------------------------------------------------
-
-
-    print("\n" + "=" * 60)
-    print("TEST: Ensure Asset Local (CREATE-ONLY POLICY)")
-    print("=" * 60)
-
-    account = "billiysusldx"
-    tenant = "DefaultTenant"
-
-    folder_path = "Shared/MCP_Test/Level1/Level2"
-
-    import os
-    cred_password = os.getenv("MCP_TEST_CRED_PASSWORD", "").strip()
-
-    client = OrchestratorClient(account, tenant)
-
-    try:
-        await client.authenticate()
-
-        # Ensure folder exists once
-        await client.ensure_folder_path(folder_path)
-
-        test_cases = [
-            {
-                "label": "Text",
-                "name": "MCP_TEST_ASSET_TEXT",
-                "spec_create": {
-                    "Name": "MCP_TEST_ASSET_TEXT",
-                    "ValueType": "Text",
-                    "Value": "initial_value",
-                },
-                "spec_update": {
-                    "Name": "MCP_TEST_ASSET_TEXT",
-                    "ValueType": "Text",
-                    "Value": "should_not_update",
-                },
-                "field": "StringValue",
-            },
-            {
-                "label": "Bool",
-                "name": "MCP_TEST_ASSET_BOOL",
-                "spec_create": {
-                    "Name": "MCP_TEST_ASSET_BOOL",
-                    "ValueType": "Bool",
-                    "Value": False,
-                },
-                "spec_update": {
-                    "Name": "MCP_TEST_ASSET_BOOL",
-                    "ValueType": "Bool",
-                    "Value": True,
-                },
-                "field": "BoolValue",
-            },
-            {
-                "label": "Integer",
-                "name": "MCP_TEST_ASSET_INT",
-                "spec_create": {
-                    "Name": "MCP_TEST_ASSET_INT",
-                    "ValueType": "Integer",
-                    "Value": 1,
-                },
-                "spec_update": {
-                    "Name": "MCP_TEST_ASSET_INT",
-                    "ValueType": "Integer",
-                    "Value": 999,
-                },
-                "field": "IntValue",
-            },
-        ]
-
-        # Add Credential case only if password provided
-        if cred_password:
-            test_cases.append(
-                {
-                    "label": "Credential",
-                    "name": "MCP_TEST_ASSET_CRED",
-                    "spec_create": {
-                        "Name": "MCP_TEST_ASSET_CRED",
-                        "ValueType": "Credential",
-                        "Value": {
-                            "username": "mcp_test_user",
-                            "password": cred_password,
-                        },
-                    },
-                    "spec_update": {
-                        "Name": "MCP_TEST_ASSET_CRED",
-                        "ValueType": "Credential",
-                        "Value": {
-                            "username": "mcp_test_user",
-                            "password": "different_password_should_be_ignored",
-                        },
-                    },
-                    "field": "CredentialUsername",  # password is never returned
-                }
-            )
-        else:
-            print("⚠ Skipping Credential test (MCP_TEST_CRED_PASSWORD not set)")
-
-        # ----------------------------------------------------------
-        # Execute test cases
-        # ----------------------------------------------------------
-        for case in test_cases:
-
-            print("\n" + "-" * 60)
-            print(f"CASE: {case['label']} ({case['name']})")
-            print("-" * 60)
-
-            # 1️⃣ Create
-            asset1 = await client.ensure_asset_local(
-                folder_path,
-                case["spec_create"],
-            )
-
-            print(f"✓ Created or ensured — Asset ID: {asset1.get('Id')}")
-
-            # 2️⃣ Call again with modified value (should NOT update)
-            asset2 = await client.ensure_asset_local(
-                folder_path,
-                case["spec_update"],
-            )
-
-            if asset1.get("Id") != asset2.get("Id"):
-                raise AssertionError("✗ Asset ID changed — not idempotent")
-
-            print("✓ No update performed (create-only policy)")
-            print("✓ Idempotency confirmed")
-
-            # 3️⃣ Verify original value still stored
-            folder = await client.ensure_folder_path(folder_path)
-            assets = await client.get_assets(folder["Id"])
-
-            stored = next(
-                (a for a in assets if a["Name"] == case["name"]),
-                None,
-            )
-
-            if not stored:
-                raise AssertionError("✗ Asset not found after ensure")
-
-            field = case["field"]
-
-            if case["label"] == "Credential":
-                expected = case["spec_create"]["Value"]["username"]
-            else:
-                expected = case["spec_create"]["Value"]
-
-            if stored.get(field) != expected:
-                raise AssertionError(
-                    f"✗ Asset value was modified unexpectedly "
-                    f"(expected={expected}, got={stored.get(field)})"
-                )
-
-            print("✓ Verified original value preserved")
-
-        print("\n" + "=" * 60)
-        print("✓ PASS: All create-only asset tests completed successfully")
-        print("=" * 60)
-
-        return True
-
-    except Exception as e:
-        print(f"\n✗ FAIL: {e}")
         return False
 
     finally:
@@ -1013,6 +929,8 @@ async def test_download_storage_file():
                         file_path=file["FullPath"],
                     )
 
+
+
                     assert path.exists()
                     assert path.stat().st_size > 0
 
@@ -1040,7 +958,256 @@ async def test_download_storage_file():
     return True
 
 
+async def test_queue_items_diagnosis():
+    print("\n" + "=" * 60)
+    print("DIAGNOSIS: QueueItems 400 Bad Request")
+    print("=" * 60)
 
+    pairs = get_all_account_tenant_pairs()
+    account, tenant = pairs[0]
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        folders = await client.get_folders()
+        folder = folders[0]
+        folder_id = folder["Id"]
+
+        queues = await client.get_queues(folder_id)
+        queue = queues[0]
+        queue_id = queue["Id"]
+
+        print(f"folder_id : {folder_id}")
+        print(f"queue_id  : {queue_id}")
+
+        # ------------------------------------------------
+        # STEP 1: Completely raw — no filter at all
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 1: No filter whatsoever")
+        print("-" * 50)
+        try:
+            endpoint = "odata/QueueItems"
+            response = await client.get(endpoint)
+            print(f"✓ Success — raw keys: {list(response.keys())}")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 2: No filter but with folder header explicitly
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 2: No filter + explicit X-UIPATH-OrganizationUnitId header")
+        print("-" * 50)
+        try:
+            endpoint = "odata/QueueItems"
+            response = await client.get(
+                endpoint,
+                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
+            )
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 3: Only QueueDefinitionId filter
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 3: Only QueueDefinitionId eq filter")
+        print("-" * 50)
+        try:
+            endpoint = f"odata/QueueItems?$filter=QueueDefinitionId eq {queue_id}"
+            response = await client.get(endpoint)
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 4: QueueDefinitionId + folder header
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 4: QueueDefinitionId filter + folder header")
+        print("-" * 50)
+        try:
+            endpoint = f"odata/QueueItems?$filter=QueueDefinitionId eq {queue_id}"
+            response = await client.get(
+                endpoint,
+                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
+            )
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 5: Add CreationTime ge only (no lt)
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 5: QueueDefinitionId + CreationTime ge (no folder header)")
+        print("-" * 50)
+        try:
+            start = datetime.now(timezone.utc) - timedelta(days=30)
+            start_str = start.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$filter=QueueDefinitionId eq {queue_id}"
+                f" and CreationTime ge {start_str}"
+            )
+            print(f"  URL filter: {endpoint}")
+            response = await client.get(endpoint)
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 6: Add CreationTime ge only + folder header
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 6: QueueDefinitionId + CreationTime ge + folder header")
+        print("-" * 50)
+        try:
+            start = datetime.now(timezone.utc) - timedelta(days=30)
+            start_str = start.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$filter=QueueDefinitionId eq {queue_id}"
+                f" and CreationTime ge {start_str}"
+            )
+            print(f"  URL filter: {endpoint}")
+            response = await client.get(
+                endpoint,
+                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
+            )
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 7: Full date range (ge + lt) no folder header
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 7: Full date range, no folder header")
+        print("-" * 50)
+        try:
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            start = now - timedelta(days=30)
+            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$filter=QueueDefinitionId eq {queue_id}"
+                f" and CreationTime ge {start_str}"
+                f" and CreationTime lt {end_str}"
+            )
+            print(f"  URL filter: {endpoint}")
+            response = await client.get(endpoint)
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 8: Full date range + folder header
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 8: Full date range + folder header")
+        print("-" * 50)
+        try:
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            start = now - timedelta(days=30)
+            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$filter=QueueDefinitionId eq {queue_id}"
+                f" and CreationTime ge {start_str}"
+                f" and CreationTime lt {end_str}"
+            )
+            print(f"  URL filter: {endpoint}")
+            response = await client.get(
+                endpoint,
+                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
+            )
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 9: Try StartProcessing instead of CreationTime
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 9: StartProcessing instead of CreationTime + folder header")
+        print("-" * 50)
+        try:
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            start = now - timedelta(days=30)
+            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            endpoint = (
+                f"odata/QueueItems"
+                f"?$filter=QueueDefinitionId eq {queue_id}"
+                f" and StartProcessing ge {start_str}"
+                f" and StartProcessing lt {end_str}"
+            )
+            print(f"  URL filter: {endpoint}")
+            response = await client.get(
+                endpoint,
+                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
+            )
+            print(f"✓ Success")
+            items = response.get("value", [])
+            print(f"  Item count: {len(items)}")
+        except Exception as e:
+            print(f"✗ Failed: {e}")
+
+        # ------------------------------------------------
+        # STEP 10: Dump what headers client.get() actually sends
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 10: Inspect default headers on client")
+        print("-" * 50)
+        try:
+            if hasattr(client, '_session') and client._session:
+                print(f"  Session headers: {dict(client._session.headers)}")
+            if hasattr(client, '_headers'):
+                print(f"  Client _headers: {client._headers}")
+            if hasattr(client, 'headers'):
+                print(f"  Client headers: {client.headers}")
+        except Exception as e:
+            print(f"  Could not inspect headers: {e}")
+
+        # ------------------------------------------------
+        # STEP 11: Check what base URL is being used
+        # ------------------------------------------------
+        print("\n" + "-" * 50)
+        print("STEP 11: Client internals")
+        print("-" * 50)
+        for attr in ['base_url', '_base_url', 'account', 'tenant', 'folder_id', '_folder_id']:
+            val = getattr(client, attr, "N/A")
+            print(f"  {attr}: {val}")
+
+    except Exception as e:
+        print(f"✗ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        await client.close()
 
 
 
@@ -1053,7 +1220,6 @@ if __name__ == "__main__":
 
      #asyncio.run(test_connection())
      #asyncio.run(test_get_folders_tree_multi_tenant())
-     #asyncio.run(test_get_folders_multi_tenant())
      #asyncio.run(test_get_assets_multi_tenant())
      #asyncio.run(test_folder_collections("get_queues", "Queues"))
      #asyncio.run(test_folder_collections("get_triggers", "Triggers"))
@@ -1064,5 +1230,8 @@ if __name__ == "__main__":
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
-     asyncio.run(test_download_storage_file())
+     #asyncio.run(test_download_storage_file())
+  #   asyncio.run(test_get_queue_items())
+     asyncio.run(test_queue_items_diagnosis())
+  
 

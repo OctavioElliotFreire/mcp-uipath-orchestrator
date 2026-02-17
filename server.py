@@ -108,6 +108,42 @@ async def list_library_versions( account: str, tenant: str, package_id: str) -> 
     return await client.list_library_versions(package_id)
 
 
+@mcp.tool()
+async def list_folders(account: str, tenant: str) -> str:
+    """
+    Retrieve the full nested folder tree for a UiPath tenant.
+
+    READ-ONLY DISCOVERY TOOL.
+    Folders are TENANT-SCOPED.
+
+    Returns:
+      {
+        "status": "ok",
+        "folders": [...]
+      }
+
+    On failure:
+      {
+        "status": "error",
+        "message": "..."
+      }
+    """
+
+    client = await get_client(account, tenant)
+
+    try:
+        tree = await client.get_folders_tree()
+
+        return json.dumps({
+            "status": "ok",
+            "folders": tree
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
 # -----------------------------------------------------------------------------
 # FOLDER-SCOPED OPERATIONAL TOOLS
 # -----------------------------------------------------------------------------
