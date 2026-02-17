@@ -281,6 +281,83 @@ class OrchestratorClient:
     async def get_storage_buckets(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/Buckets", folder_id))  
     
+    async def download_storage_file(self,folder_id: int,bucket_id: int,file_path: str) -> Path:
+        """
+        Download a storage file using the two-step Cloud API pattern:
+        1. GET a signed download URI from Orchestrator
+        2. GET the actual file bytes from that URI
+        """
+
+        if not self._access_token:
+            await self.authenticate()
+
+        # Step 1: Get the signed download URI from Orchestrator
+        # This is a GET with query params, NOT a POST with a body
+        endpoint = (
+            f"odata/Buckets({bucket_id})"
+            f"/UiPath.Server.Configuration.OData.GetReadUri"
+        )
+
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
+
+        params = {"path": file_path}
+        headers = self._headers(folder_id)
+
+        r = await self.client.get(url, headers=headers, params=params)
+        r.raise_for_status()
+
+        data = r.json()
+        download_uri = data["Uri"]
+
+        # Step 2: Fetch the actual file bytes from the signed URI
+        # No auth headers needed — it's a pre-signed blob URL
+        file_response = await self.client.get(download_uri)
+        file_response.raise_for_status()
+
+        # Write to disk
+        base = Path(self.download_dir)
+        base.mkdir(parents=True, exist_ok=True)
+
+        filename = file_path.split("/")[-1]
+        path = base / filename
+        path.write_bytes(file_response.content)
+
+        return path
+
+
+    async def get_storage_files(self,folder_id: int,bucket_id: int) -> list[dict]:
+        """
+        List all files inside a storage bucket.
+        
+        Args:
+            folder_id: Folder containing the bucket
+            bucket_id: ID of the storage bucket
+            directory: Directory path to list (default: "/" for root)
+            recursive: Whether to list files recursively in subdirectories
+        
+        Returns:
+            List of file objects with properties:
+            - FullPath: Full path/name of the file in the bucket
+            - ContentType: MIME type (e.g., "application/json")
+            - Size: File size in bytes
+            - IsDirectory: Whether this is a directory (bool or null)
+            - Id: File ID (appears to be null in API response)
+            
+        Note: Files have FullPath but no separate Name property.
+            Use FullPath.split('/')[-1] to extract just the filename.
+        """
+        endpoint = (
+            f"odata/Buckets({bucket_id})/"
+            f"UiPath.Server.Configuration.OData.GetFiles"
+            f"?directory=/&recursive={'true'}"
+        )
+        
+        data = await self.get(endpoint, folder_id=folder_id)
+        return self._unwrap_odata(data)
+
     async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
         return sorted(

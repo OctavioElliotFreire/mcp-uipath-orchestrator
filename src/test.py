@@ -972,6 +972,77 @@ async def test_link_resources_to_first_valid_folder():
     finally:
         await client.close()
 
+async def test_download_storage_file():
+    print("\n" + "=" * 60)
+    print("TEST: Download Storage File")
+    print("=" * 60)
+
+    for account, tenant in get_all_account_tenant_pairs():
+        key = f"{account}/{tenant}"
+        client = OrchestratorClient(account, tenant)
+
+        try:
+            await client.authenticate()
+
+            folders = await client.get_folders()
+            if not folders:
+                print(f"⚠ {key}: No folders found")
+                continue
+
+            file_downloaded = False
+
+            for folder in folders:
+                folder_id = folder["Id"]
+
+                buckets = await client.get_storage_buckets(folder_id)
+                if not buckets:
+                    continue
+
+                for bucket in buckets:
+                    bucket_id = bucket["Id"]
+
+                    files = await client.get_storage_files(folder_id, bucket_id)
+                    if not files:
+                        continue
+
+                    file = files[0]
+                    print(file)
+                    path = await client.download_storage_file(
+                        folder_id=folder_id,
+                        bucket_id=bucket_id,
+                        file_path=file["FullPath"],
+                    )
+
+                    assert path.exists()
+                    assert path.stat().st_size > 0
+
+                    print(
+                        f"✓ {key}: Downloaded '{file['FullPath']}' "
+                        f"from bucket '{bucket['Name']}'"
+                    )
+
+                    file_downloaded = True
+                    break
+
+                if file_downloaded:
+                    break
+
+            if not file_downloaded:
+                print(f"⚠ {key}: No storage files found in any bucket")
+
+        except Exception as e:
+            print(f"✗ {key}: {e}")
+            return False
+
+        finally:
+            await client.close()
+
+    return True
+
+
+
+
+
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -992,4 +1063,6 @@ if __name__ == "__main__":
      #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_resources_local())
-    asyncio.run(test_link_resources_to_first_valid_folder())
+     #asyncio.run(test_link_resources_to_first_valid_folder())
+     asyncio.run(test_download_storage_file())
+
