@@ -42,6 +42,7 @@ class QueueItemStatus(str, Enum):
     Successful = "Successful"
     Retried = "Retried"
     Abandoned = "Abandoned"
+    Deleted = "Deleted"
 
 
 # -------------------------------------------------------------------------
@@ -287,6 +288,27 @@ class OrchestratorClient:
 
     async def get_queues(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
+    
+    async def _resolve_folder_from_queue2(self, queue_id: int) -> int:
+        """
+        Resolve folder_id from queue_id by scanning folders.
+        Required in modern folder tenants where QueueDefinitions is folder-scoped.
+        """
+
+        folders = await self.get_folders()
+
+        for folder in folders:
+            folder_id = folder["Id"]
+
+            try:
+                queues = await self.get_queues(folder_id)
+            except Exception:
+                continue
+
+            for q in queues:
+                if q["Id"] == queue_id:
+                    return folder_id
+    
 
 
     def _to_uipath_datetime(self, dt: datetime) -> str:
@@ -318,7 +340,12 @@ class OrchestratorClient:
             raise ValueError("queue_id is required")
 
         # --------------------------------------------------
-        # Cloud-safe: enforce date window
+        # STEP 1: Resolve folder automatically
+        # --------------------------------------------------
+        folder_id = await self._resolve_folder_from_queue(queue_id)
+
+        # --------------------------------------------------
+        # STEP 2: Cloud-safe default 30-day window
         # --------------------------------------------------
         if not start_time and not end_time:
             end_time = datetime.now(timezone.utc)
@@ -351,17 +378,20 @@ class OrchestratorClient:
         filter_query = " and ".join(filters)
 
         skip = 0
-        all_items: List[Dict] = []
         PAGE_SIZE = 100
+        all_items: List[Dict] = []
 
         while True:
             endpoint = (
                 f"odata/QueueItems"
-                f"?$skip={skip}"
+                f"?$top={PAGE_SIZE}"
+                f"&$skip={skip}"
                 f"&$filter={filter_query}"
             )
 
-            response = await self.get(endpoint)
+            # IMPORTANT: pass resolved folder_id
+            response = await self.get(endpoint, folder_id=folder_id)
+
             items = self._unwrap_odata(response)
             all_items.extend(items)
 
@@ -374,6 +404,7 @@ class OrchestratorClient:
             skip += PAGE_SIZE
 
         return all_items
+
     async def get_triggers(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
 

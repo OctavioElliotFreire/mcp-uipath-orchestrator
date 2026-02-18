@@ -254,7 +254,7 @@ async def test_get_resources():
 
 async def test_get_queue_items():
     print("\n" + "=" * 60)
-    print("TEST: get_queue_items() — FULL OUTPUT")
+    print("TEST: get_queue_items() — ALL QUEUES")
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
@@ -263,9 +263,8 @@ async def test_get_queue_items():
         print("No account/tenant configured.")
         return False
 
-    account, tenant = pairs[0]
-    key = f"{account}/{tenant}"
-    print(f"Using: {key}")
+    account, tenant = pairs[1]
+    print(f"Using: {account}/{tenant}")
 
     client = OrchestratorClient(account, tenant)
 
@@ -278,129 +277,60 @@ async def test_get_queue_items():
             print("No folders found.")
             return False
 
-        folder = folders[0]
-        folder_id = folder["Id"]
-
-        print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
-
-        queues = await client.get_queues(folder_id)
-
-        if not queues:
-            print("No queues found.")
-            return False
-
-        queue = queues[0]
-        queue_id = queue["Id"]
-
-        print(f"🎯 Queue: {queue['Name']} ({queue_id})")
+        total_items_across_all_queues = 0
 
         # ----------------------------------------------------
-        # 1️⃣ Basic fetch (no filters)
+        # Iterate all folders
         # ----------------------------------------------------
-        print("\n" + "-" * 50)
-        print("CASE 1: Basic fetch (no filters)")
-        print("-" * 50)
+        for folder in folders:
+            folder_id = folder["Id"]
+            folder_name = folder["DisplayName"]
 
-        items = await client.get_queue_items(            
-            queue_id=queue_id,
-        )
+            print("\n" + "-" * 60)
+            print(f"📁 Folder: {folder_name} ({folder_id})")
+            print("-" * 60)
 
-        print(f"Returned {len(items)} items")
-        for idx, item in enumerate(items[:5], 1):
-            print(f"\nItem #{idx}:")
-            print(json.dumps(item, indent=4, default=str))
+            queues = await client.get_queues(folder_id)
 
-        # ----------------------------------------------------
-        # 2️⃣ Single status
-        # ----------------------------------------------------
-        print("\n" + "-" * 50)
-        print("CASE 2: Single status filter (Failed)")
-        print("-" * 50)
+            if not queues:
+                print("No queues in this folder.")
+                continue
 
-        items = await client.get_queue_items(
-            queue_id=queue_id,
-            statuses=[QueueItemStatus.Failed],
-        )
+            # ------------------------------------------------
+            # Iterate all queues in folder
+            # ------------------------------------------------
+            for queue in queues:
+                queue_id = queue["Id"]
+                queue_name = queue["Name"]
 
-        print(f"Returned {len(items)} Failed items")
+                print(f"\n🎯 Queue: {queue_name} ({queue_id})")
 
-        # ----------------------------------------------------
-        # 3️⃣ Multiple statuses
-        # ----------------------------------------------------
-        print("\n" + "-" * 50)
-        print("CASE 3: Multiple statuses (Failed, Abandoned)")
-        print("-" * 50)
+                try:
+                    items = await client.get_queue_items(
+                        queue_id=queue_id
+                    )
 
-        items = await client.get_queue_items(
-            queue_id=queue_id,
-            statuses=[
-                QueueItemStatus.Failed,
-                QueueItemStatus.Abandoned,
-            ],
-        )
+                    print(f"   → Returned {len(items)} items")
 
-        print(f"Returned {len(items)} Failed/Abandoned items")
+                    total_items_across_all_queues += len(items)
 
-        # ----------------------------------------------------
-        # 4️⃣ Date range filter (last 7 days)
-        # ----------------------------------------------------
-        print("\n" + "-" * 50)
-        print("CASE 4: Date range (last 7 days)")
-        print("-" * 50)
+                except Exception as e:
+                    print(f"   ✗ Failed to fetch items: {e}")
 
-        now = datetime.now(timezone.utc)
-        seven_days_ago = now - timedelta(days=7)
-
-        items = await client.get_queue_items(
-            queue_id=queue_id,
-            start_time=seven_days_ago,
-            end_time=now,
-        )
-
-        print(f"Returned {len(items)} items in last 7 days")
-
-        # ----------------------------------------------------
-        # 5️⃣ Reference lookup (if items exist)
-        # ----------------------------------------------------
-        if items:
-            reference = items[0].get("Reference")
-
-            if reference:
-                print("\n" + "-" * 50)
-                print(f"CASE 5: Reference lookup ({reference})")
-                print("-" * 50)
-
-                ref_items = await client.get_queue_items(
-                    queue_id=queue_id,
-                    reference=reference,
-                )
-
-                print(f"Returned {len(ref_items)} item(s)")
-                print(json.dumps(ref_items[0], indent=4, default=str))
-
-        # ----------------------------------------------------
-        # 6️⃣ Validation test (missing queue_id)
-        # ----------------------------------------------------
-        print("\n" + "-" * 50)
-        print("CASE 6: Validation error (missing queue_id)")
-        print("-" * 50)
-
-        try:
-            await client.get_queue_items(
-                    queue_id=None,
-            )
-        except Exception as e:
-            print(f"✓ Expected error: {e}")
+        print("\n" + "=" * 60)
+        print(f"TOTAL ITEMS ACROSS ALL QUEUES: {total_items_across_all_queues}")
+        print("=" * 60)
 
         return True
 
     except Exception as e:
-        print(f"✗ Error: {e}")
+        print(f"✗ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
     finally:
         await client.close()
-
 
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
@@ -957,259 +887,198 @@ async def test_download_storage_file():
 
     return True
 
-
-async def test_queue_items_diagnosis():
+async def test_resolve_folder_from_queue():
     print("\n" + "=" * 60)
-    print("DIAGNOSIS: QueueItems 400 Bad Request")
+    print("TEST: _resolve_folder_from_queue()")
     print("=" * 60)
 
     pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
     account, tenant = pairs[0]
+    print(f"Using: {account}/{tenant}")
+
     client = OrchestratorClient(account, tenant)
 
     try:
         await client.authenticate()
 
+        # ------------------------------------------------
+        # STEP 1: Get real folder + queue
+        # ------------------------------------------------
         folders = await client.get_folders()
+
+        if not folders:
+            print("No folders found.")
+            return False
+
         folder = folders[0]
         folder_id = folder["Id"]
 
+        print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
+
         queues = await client.get_queues(folder_id)
+
+        if not queues:
+            print("No queues found.")
+            return False
+
         queue = queues[0]
         queue_id = queue["Id"]
 
-        print(f"folder_id : {folder_id}")
-        print(f"queue_id  : {queue_id}")
+        print(f"🎯 Queue: {queue['Name']} ({queue_id})")
 
         # ------------------------------------------------
-        # STEP 1: Completely raw — no filter at all
+        # STEP 2: Resolve folder from queue_id
         # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 1: No filter whatsoever")
-        print("-" * 50)
+        resolved_folder_id = await client._resolve_folder_from_queue(queue_id)
+
+        print(f"\nResolved folder_id: {resolved_folder_id}")
+
+        # ------------------------------------------------
+        # STEP 3: Validate correctness
+        # ------------------------------------------------
+        if resolved_folder_id == folder_id:
+            print("✓ Folder resolution correct")
+        else:
+            print("✗ Folder resolution incorrect")
+            print(f"Expected: {folder_id}")
+            print(f"Got: {resolved_folder_id}")
+            return False
+
+        # ------------------------------------------------
+        # STEP 4: Negative test (invalid queue)
+        # ------------------------------------------------
+        print("\nTesting invalid queue_id...")
+
         try:
-            endpoint = "odata/QueueItems"
-            response = await client.get(endpoint)
-            print(f"✓ Success — raw keys: {list(response.keys())}")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
+            await client._resolve_folder_from_queue(999999999)
+            print("✗ Expected failure but succeeded")
+            return False
+        except RuntimeError as e:
+            print(f"✓ Expected error: {e}")
 
-        # ------------------------------------------------
-        # STEP 2: No filter but with folder header explicitly
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 2: No filter + explicit X-UIPATH-OrganizationUnitId header")
-        print("-" * 50)
-        try:
-            endpoint = "odata/QueueItems"
-            response = await client.get(
-                endpoint,
-                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
-            )
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 3: Only QueueDefinitionId filter
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 3: Only QueueDefinitionId eq filter")
-        print("-" * 50)
-        try:
-            endpoint = f"odata/QueueItems?$filter=QueueDefinitionId eq {queue_id}"
-            response = await client.get(endpoint)
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 4: QueueDefinitionId + folder header
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 4: QueueDefinitionId filter + folder header")
-        print("-" * 50)
-        try:
-            endpoint = f"odata/QueueItems?$filter=QueueDefinitionId eq {queue_id}"
-            response = await client.get(
-                endpoint,
-                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
-            )
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 5: Add CreationTime ge only (no lt)
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 5: QueueDefinitionId + CreationTime ge (no folder header)")
-        print("-" * 50)
-        try:
-            start = datetime.now(timezone.utc) - timedelta(days=30)
-            start_str = start.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
-            endpoint = (
-                f"odata/QueueItems"
-                f"?$filter=QueueDefinitionId eq {queue_id}"
-                f" and CreationTime ge {start_str}"
-            )
-            print(f"  URL filter: {endpoint}")
-            response = await client.get(endpoint)
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 6: Add CreationTime ge only + folder header
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 6: QueueDefinitionId + CreationTime ge + folder header")
-        print("-" * 50)
-        try:
-            start = datetime.now(timezone.utc) - timedelta(days=30)
-            start_str = start.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
-            endpoint = (
-                f"odata/QueueItems"
-                f"?$filter=QueueDefinitionId eq {queue_id}"
-                f" and CreationTime ge {start_str}"
-            )
-            print(f"  URL filter: {endpoint}")
-            response = await client.get(
-                endpoint,
-                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
-            )
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 7: Full date range (ge + lt) no folder header
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 7: Full date range, no folder header")
-        print("-" * 50)
-        try:
-            now = datetime.now(timezone.utc).replace(microsecond=0)
-            start = now - timedelta(days=30)
-            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            endpoint = (
-                f"odata/QueueItems"
-                f"?$filter=QueueDefinitionId eq {queue_id}"
-                f" and CreationTime ge {start_str}"
-                f" and CreationTime lt {end_str}"
-            )
-            print(f"  URL filter: {endpoint}")
-            response = await client.get(endpoint)
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 8: Full date range + folder header
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 8: Full date range + folder header")
-        print("-" * 50)
-        try:
-            now = datetime.now(timezone.utc).replace(microsecond=0)
-            start = now - timedelta(days=30)
-            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            endpoint = (
-                f"odata/QueueItems"
-                f"?$filter=QueueDefinitionId eq {queue_id}"
-                f" and CreationTime ge {start_str}"
-                f" and CreationTime lt {end_str}"
-            )
-            print(f"  URL filter: {endpoint}")
-            response = await client.get(
-                endpoint,
-                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
-            )
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 9: Try StartProcessing instead of CreationTime
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 9: StartProcessing instead of CreationTime + folder header")
-        print("-" * 50)
-        try:
-            now = datetime.now(timezone.utc).replace(microsecond=0)
-            start = now - timedelta(days=30)
-            start_str = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-            end_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            endpoint = (
-                f"odata/QueueItems"
-                f"?$filter=QueueDefinitionId eq {queue_id}"
-                f" and StartProcessing ge {start_str}"
-                f" and StartProcessing lt {end_str}"
-            )
-            print(f"  URL filter: {endpoint}")
-            response = await client.get(
-                endpoint,
-                headers={"X-UIPATH-OrganizationUnitId": str(folder_id)}
-            )
-            print(f"✓ Success")
-            items = response.get("value", [])
-            print(f"  Item count: {len(items)}")
-        except Exception as e:
-            print(f"✗ Failed: {e}")
-
-        # ------------------------------------------------
-        # STEP 10: Dump what headers client.get() actually sends
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 10: Inspect default headers on client")
-        print("-" * 50)
-        try:
-            if hasattr(client, '_session') and client._session:
-                print(f"  Session headers: {dict(client._session.headers)}")
-            if hasattr(client, '_headers'):
-                print(f"  Client _headers: {client._headers}")
-            if hasattr(client, 'headers'):
-                print(f"  Client headers: {client.headers}")
-        except Exception as e:
-            print(f"  Could not inspect headers: {e}")
-
-        # ------------------------------------------------
-        # STEP 11: Check what base URL is being used
-        # ------------------------------------------------
-        print("\n" + "-" * 50)
-        print("STEP 11: Client internals")
-        print("-" * 50)
-        for attr in ['base_url', '_base_url', 'account', 'tenant', 'folder_id', '_folder_id']:
-            val = getattr(client, attr, "N/A")
-            print(f"  {attr}: {val}")
+        return True
 
     except Exception as e:
         print(f"✗ Fatal error: {e}")
         import traceback
         traceback.print_exc()
+        return False
 
     finally:
         await client.close()
 
 
+    print("\n" + "=" * 60)
+    print("TEST: _resolve_folder_from_resource()")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    print(f"Using: {account}/{tenant}")
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        # ------------------------------------------------
+        # STEP 1: Get folders
+        # ------------------------------------------------
+        folders = await client.get_folders()
+
+        if not folders:
+            print("No folders found.")
+            return False
+
+        folder = folders[0]
+        folder_id = folder["Id"]
+
+        print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
+
+        # ------------------------------------------------
+        # STEP 2: Test QUEUE resolution
+        # ------------------------------------------------
+        queues = await client.get_queues(folder_id)
+
+        if queues:
+            queue = queues[0]
+            queue_id = queue["Id"]
+
+            print(f"\n🎯 Testing queue resolution: {queue['Name']} ({queue_id})")
+
+            resolved_folder_id = await client._resolve_folder_from_resource(
+                "queues",
+                queue_id
+            )
+
+            print(f"Resolved folder_id: {resolved_folder_id}")
+
+            if resolved_folder_id == folder_id:
+                print("✓ Queue folder resolution correct")
+            else:
+                print("✗ Queue folder resolution incorrect")
+                return False
+        else:
+            print("No queues found to test.")
+
+        # ------------------------------------------------
+        # STEP 3: Test ASSET resolution
+        # ------------------------------------------------
+        assets = await client.get_assets(folder_id)
+
+        if assets:
+            asset = assets[0]
+            asset_id = asset["Id"]
+
+            print(f"\n📦 Testing asset resolution: {asset['Name']} ({asset_id})")
+
+            resolved_folder_id = await client._resolve_folder_from_resource(
+                "assets",
+                asset_id
+            )
+
+            print(f"Resolved folder_id: {resolved_folder_id}")
+
+            if resolved_folder_id == folder_id:
+                print("✓ Asset folder resolution correct")
+            else:
+                print("✗ Asset folder resolution incorrect")
+                return False
+        else:
+            print("No assets found to test.")
+
+        # ------------------------------------------------
+        # STEP 4: Negative test
+        # ------------------------------------------------
+        print("\n🚫 Testing invalid resource id")
+
+        try:
+            await client._resolve_folder_from_resource("queues", 999999999)
+            print("✗ Expected failure but succeeded")
+            return False
+        except RuntimeError as e:
+            print(f"✓ Expected error: {e}")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    finally:
+        await client.close()
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -1226,12 +1095,14 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     asyncio.run(test_get_resources())
+     #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
      #asyncio.run(test_download_storage_file())
-     #asyncio.run(test_get_queue_items())
+     asyncio.run(test_get_queue_items())
      #asyncio.run(test_queue_items_diagnosis())
+     #asyncio.run(test_resolve_folder_from_queue())
+
   
 

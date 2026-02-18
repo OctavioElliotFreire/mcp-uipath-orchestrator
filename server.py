@@ -11,6 +11,10 @@ import json
 from mcp.server.fastmcp import FastMCP
 from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 from typing import  Dict,Optional
+from src.service import QueueItemStatus
+from typing import List
+from datetime import datetime
+from dateutil import parser as dateutil_parser
 
 # -----------------------------------------------------------------------------
 # Client cache (one client per account/tenant, shared token)
@@ -37,7 +41,7 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 # MCP Server
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("uipath-orchestrator")
+mcp = FastMCP("uipath-orchestrator2")
 
 # -----------------------------------------------------------------------------
 # DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
@@ -252,13 +256,7 @@ import json
 
 
 @mcp.tool()
-async def ensure_resource_in_folder(
-    resource_type: str,
-    folder_path: str,
-    resource_spec: Dict[str, Any],
-    account: str,
-    tenant: str
-) -> str:
+async def ensure_resource_in_folder(resource_type: str,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """
     Ensure that a resource exists inside a specific folder.
 
@@ -343,8 +341,53 @@ async def link_resource_to_folder(resource_type: str, resource_name: str, candid
 
     return json.dumps(result, indent=2)
 
+@mcp.tool()
+async def get_queue_items(
+    account: str,
+    tenant: str,
+    queue_id: int,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    statuses: Optional[List[QueueItemStatus]] = None,
+    reference: Optional[str] = None
+) -> str:
+    """
+    ...
+    - start_time / end_time: any common date format (e.g. "2025-01-01", "01/01/2025", "2025-01-01T00:00:00Z")
+    ...
+    """
 
+    client = await get_client(account, tenant)
 
+    try:
+        parsed_start = dateutil_parser.parse(start_time) if start_time else None
+        parsed_end = dateutil_parser.parse(end_time) if end_time else None
+
+        parsed_statuses = (
+            [QueueItemStatus(s) for s in statuses]
+            if statuses else None
+        )
+
+        items = await client.get_queue_items(
+            queue_id=queue_id,
+            start_time=parsed_start,
+            end_time=parsed_end,
+            statuses=parsed_statuses,
+            reference=reference,
+        )
+
+        return json.dumps({
+            "status": "ok",
+            "queue_id": queue_id,
+            "count": len(items),
+            "items": items
+        }, indent=2, default=str)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
 # -----------------------------------------------------------------------------
 # ACTION-SCOPED OPERATIONAL TOOLS
 # -----------------------------------------------------------------------------
