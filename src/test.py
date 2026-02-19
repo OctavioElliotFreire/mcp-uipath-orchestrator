@@ -8,7 +8,7 @@ import json
 import asyncio
 from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 import json
-from service import OrchestratorClient, QueueItemStatus,ResourceTypes
+from service import OrchestratorClient, QueueItemStatus,ResourceTypes,LinkableResourceTypes
 
 
 
@@ -510,13 +510,13 @@ async def test_ensure_resources_local():
             print("-" * 60)
 
             asset1 = await client.ensure_resource_in_folder(
-                resource_type=ResourceTypes.assets,
+                linkable_resource_type=LinkableResourceTypes.assets,
                 folder_path=folder_path,
                 resource_spec=case["spec_create"],
             )
 
             asset2 = await client.ensure_resource_in_folder(
-                resource_type=ResourceTypes.assets,
+                linkable_resource_type=LinkableResourceTypes.assets,
                 folder_path=folder_path,
                 resource_spec=case["spec_update"],
             )
@@ -566,13 +566,13 @@ async def test_ensure_resources_local():
         }
 
         q1 = await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.queues,
+            linkable_resource_type=LinkableResourceTypes.queues,
             folder_path=folder_path,
             resource_spec=queue_create,
         )
 
         q2 = await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.queues,
+            linkable_resource_type=LinkableResourceTypes.queues,
             folder_path=folder_path,
             resource_spec=queue_update,
         )
@@ -614,13 +614,13 @@ async def test_ensure_resources_local():
         }
 
         b1 = await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.storage_buckets,
+            linkable_resource_type=LinkableResourceTypes.storage_buckets,
             folder_path=folder_path,
             resource_spec=bucket_create,
         )
 
         b2 = await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.storage_buckets,
+            linkable_resource_type=LinkableResourceTypes.storage_buckets,
             folder_path=folder_path,
             resource_spec=bucket_update,
         )
@@ -654,7 +654,6 @@ async def test_ensure_resources_local():
 
     finally:
         await client.close()
-
 
 async def test_link_resources_to_first_valid_folder():
     print("\n" + "=" * 60)
@@ -695,13 +694,13 @@ async def test_link_resources_to_first_valid_folder():
         }
 
         await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.assets,
+            linkable_resource_type=LinkableResourceTypes.assets,
             folder_path=base_folder,
             resource_spec=asset_spec,
         )
 
         result = await client.link_resource_to_folder(
-            resource_type=ResourceTypes.assets,
+            linkable_resource_type=LinkableResourceTypes.assets,
             resource_name=asset_spec["Name"],
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
@@ -732,13 +731,13 @@ async def test_link_resources_to_first_valid_folder():
         }
 
         await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.queues,
+            linkable_resource_type=LinkableResourceTypes.queues,
             folder_path=base_folder,
             resource_spec=queue_spec,
         )
 
         result = await client.link_resource_to_folder(
-            resource_type=ResourceTypes.queues,
+            linkable_resource_type=LinkableResourceTypes.queues,
             resource_name=queue_spec["Name"],
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
@@ -767,13 +766,13 @@ async def test_link_resources_to_first_valid_folder():
         }
 
         await client.ensure_resource_in_folder(
-            resource_type=ResourceTypes.storage_buckets,
+            linkable_resource_type=LinkableResourceTypes.storage_buckets,
             folder_path=base_folder,
             resource_spec=bucket_spec,
         )
 
         result = await client.link_resource_to_folder(
-            resource_type=ResourceTypes.storage_buckets,
+            linkable_resource_type=LinkableResourceTypes.storage_buckets,
             resource_name=bucket_spec["Name"],
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
@@ -797,7 +796,7 @@ async def test_link_resources_to_first_valid_folder():
         print("-" * 60)
 
         result = await client.link_resource_to_folder(
-            resource_type=ResourceTypes.assets,
+            linkable_resource_type=LinkableResourceTypes.assets,
             resource_name="NON_EXISTENT_RESOURCE",
             candidate_folder_paths=candidate_folders,
             target_folder_path=target_folder,
@@ -1099,14 +1098,13 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     #asyncio.run(test_get_resources())
-     #asyncio.run(test_ensure_folder_path())
+     asyncio.run(test_get_resources())
+     asyncio.run(test_ensure_folder_path())
      asyncio.run(test_ensure_resources_local())
      asyncio.run(test_link_resources_to_first_valid_folder())
-     #asyncio.run(test_download_storage_file())
-     #asyncio.run(test_get_queue_items())
-     #asyncio.run(test_queue_items_diagnosis())
-     #asyncio.run(test_resolve_folder_from_queue())
+     asyncio.run(test_download_storage_file())
+     asyncio.run(test_get_queue_items())
+     asyncio.run(test_resolve_folder_from_queue())
 
   
 

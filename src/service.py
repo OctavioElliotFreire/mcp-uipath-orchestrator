@@ -3,10 +3,11 @@ import json
 import httpx
 from pathlib import Path
 import asyncio
-from typing import List, Dict, Set,Optional,TypedDict
+from typing import List, Dict, Set,Optional,TypedDict,NamedTuple
 import uuid 
 from enum import Enum
 from datetime import datetime, timezone, timedelta
+
 
 # -----------------------------------------------------------------------------
 # Configuration Types
@@ -50,7 +51,52 @@ class ResourceTypes(str, Enum):
     processes = "processes"
     triggers = "triggers"
     storage_buckets = "storage_buckets"
-    
+
+    @property
+    def is_linkable(self) -> bool:
+            return self.value in LinkableResourceTypes._value2member_map_
+
+class ResourceConfig(NamedTuple):
+    create_endpoint: str
+    share_endpoint: str
+    id_field: str
+    payload_builder: str
+
+class LinkableResourceTypes(str, Enum):
+    assets = "assets"
+    queues = "queues"
+    storage_buckets = "storage_buckets"
+
+    @property
+    def config(self) -> ResourceConfig:
+        configs = {
+            LinkableResourceTypes.assets: ResourceConfig(
+                create_endpoint="odata/Assets",
+                share_endpoint="odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="AssetIds",
+                payload_builder="_build_asset_payload",
+            ),
+            LinkableResourceTypes.queues: ResourceConfig(
+                create_endpoint="odata/QueueDefinitions",
+                share_endpoint="odata/QueueDefinitions/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="QueueIds",
+                payload_builder="_build_queue_payload",
+            ),
+            LinkableResourceTypes.storage_buckets: ResourceConfig(
+                create_endpoint="odata/Buckets",
+                share_endpoint="odata/Buckets/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="BucketIds",
+                payload_builder="_build_storage_bucket_payload",
+            ),
+        }
+        return configs[self]
+
+    def to_resource_type(self) -> ResourceTypes:
+        return ResourceTypes(self.value)
+
+
+
+
 
 # -------------------------------------------------------------------------
 # Central Resource Registry
@@ -490,6 +536,17 @@ class OrchestratorClient:
         data = await self.get(endpoint, folder_id=folder_id)
         return self._unwrap_odata(data)
 
+    @property
+    def _resource_getters(self) -> dict[ResourceTypes, callable]:
+        return {
+            ResourceTypes.assets: self.get_assets,
+            ResourceTypes.queues: self.get_queues,
+            ResourceTypes.processes: self.get_processes,
+            ResourceTypes.triggers: self.get_triggers,
+            ResourceTypes.storage_buckets: self.get_storage_buckets,
+            
+        }
+
     async def list_libraries(self) -> list[str]:
         data = await self.get("odata/Libraries")
         return sorted(
@@ -609,27 +666,11 @@ class OrchestratorClient:
     # -------------------------------------------------------------------------
     async def get_resources(self,resource_types: list[ResourceTypes],folder_id: int) -> dict[str, list | dict]:
 
-        VALID_RESOURCE_TYPES = {
-            ResourceTypes.assets: self.get_assets,
-            ResourceTypes.queues: self.get_queues,
-            ResourceTypes.processes: self.get_processes,
-            ResourceTypes.triggers: self.get_triggers,
-            ResourceTypes.storage_buckets: self.get_storage_buckets,
-        }
-
-        LINKABLE_TYPES = {
-            ResourceTypes.assets,
-            ResourceTypes.queues,
-            ResourceTypes.storage_buckets,
-        }
-
         if not resource_types:
             raise ValueError("resource_types cannot be empty")
 
-        # No need for manual validation anymore — Pydantic/enum handles it!
-
         tasks = {
-            rt: VALID_RESOURCE_TYPES[rt](folder_id)
+            rt: self._resource_getters[rt](folder_id)
             for rt in resource_types
         }
 
@@ -644,7 +685,7 @@ class OrchestratorClient:
 
             items = result or []
 
-            if resource_type in LINKABLE_TYPES:
+            if resource_type.is_linkable:
                 items = await self._attach_linked_folders(items, resource_type.value)
 
             response[resource_type.value] = items
@@ -652,13 +693,19 @@ class OrchestratorClient:
         return response
 
 
-
 # -------------------------------------------------------------------------
 # Generic cross-folder linker
 # -------------------------------------------------------------------------
 
    
-    async def link_resource_to_folder(self,resource_type: ResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,expected_value_type: Optional[str] = None) -> dict:
+    async def link_resource_to_folder(
+        self,
+        linkable_resource_type: LinkableResourceTypes,
+        resource_name: str,
+        candidate_folder_paths: list[str],
+        target_folder_path: str,
+        expected_value_type: Optional[str] = None
+    ) -> dict:
         """
         Link an existing shared resource into a target folder.
 
@@ -670,8 +717,8 @@ class OrchestratorClient:
 
         Matching behavior:
         - Resource is matched by Name.
-        - If resource_type == ResourceTypes.assets and expected_value_type is provided,
-            ValueType must also match.
+        - If linkable_resource_type == "assets" and expected_value_type is provided,
+        ValueType must also match.
         - Stops after the first successful match.
 
         Returns:
@@ -683,16 +730,8 @@ class OrchestratorClient:
         }
         """
 
-        if resource_type not in self.RESOURCE_REGISTRY:
-            raise ValueError(f"Unsupported resource_type: {resource_type}")
-
-        if not resource_name:
-            raise ValueError("resource_name is required")
-
-        if not candidate_folder_paths:
-            raise ValueError("candidate_folder_paths cannot be empty")
-
-        config = self.RESOURCE_REGISTRY[resource_type]
+        config = self.RESOURCE_REGISTRY[linkable_resource_type]
+        getter = self._resource_getters[linkable_resource_type.to_resource_type()]
 
         # Resolve target folder
         try:
@@ -706,11 +745,9 @@ class OrchestratorClient:
             }
 
         target_folder_id = target_folder["Id"]
-        getter = getattr(self, config["getter"])
 
         # Search candidate folders in order
         for folder_path in candidate_folder_paths:
-
             try:
                 folder = await self.resolve_folder_path(folder_path)
             except Exception:
@@ -725,7 +762,7 @@ class OrchestratorClient:
                     continue
 
                 # If assets and expected_value_type provided, validate ValueType
-                if resource_type == ResourceTypes.assets and expected_value_type:
+                if linkable_resource_type == LinkableResourceTypes.assets and expected_value_type:
                     if resource.get("ValueType") != expected_value_type:
                         continue
 
@@ -738,7 +775,6 @@ class OrchestratorClient:
                 try:
                     await self.post(config["share_endpoint"], payload)
                 except httpx.HTTPStatusError as e:
-                    # 409 = already linked (safe to ignore)
                     if e.response.status_code != 409:
                         raise
 
@@ -864,7 +900,7 @@ class OrchestratorClient:
 # Ensure resource exists (create-only policy)
 # -------------------------------------------------------------------------
 
-    async def ensure_resource_in_folder(self,resource_type: ResourceTypes,folder_path: str,resource_spec: dict) -> dict:
+    async def ensure_resource_in_folder2(self,resource_type: ResourceTypes,folder_path: str,resource_spec: dict) -> dict:
 
         if resource_type not in self.RESOURCE_REGISTRY:
             raise ValueError(f"Unsupported resource_type: {resource_type}")
@@ -902,7 +938,46 @@ class OrchestratorClient:
             folder_id=folder_id,
         )
         
-    async def _attach_linked_folders(self,items: List[dict],resource_type: str) -> List[dict]:
+    async def ensure_resource_in_folder(
+        self,
+        linkable_resource_type: LinkableResourceTypes,
+        folder_path: str,
+        resource_spec: dict
+    ) -> dict:
+
+        name = resource_spec.get("Name")
+        if not name:
+            raise ValueError("resource_spec must include 'Name'")
+
+        config = linkable_resource_type.config
+        getter = self._resource_getters[linkable_resource_type.to_resource_type()]
+
+        # Resolve folder
+        folder = await self.ensure_folder_path(folder_path)
+        folder_id = folder["Id"]
+
+        # Get existing resources
+        existing_items = await getter(folder_id)
+
+        existing = next(
+            (r for r in existing_items if r["Name"] == name),
+            None
+        )
+
+        if existing:
+            return existing
+
+        # Build payload dynamically
+        builder = getattr(self, config.payload_builder)
+        payload = await builder(resource_spec)
+
+        # Create resource
+        return await self.post(
+            config.create_endpoint,
+            payload,
+            folder_id=folder_id,
+        )
+    async def _attach_linked_folders(self,items: List[dict],linkable_resource_type: LinkableResourceTypes) -> List[dict]:
         """
         Optimized version:
         - Fetch folder items concurrently
@@ -913,16 +988,7 @@ class OrchestratorClient:
         if not items:
             return items
 
-        RESOURCE_GETTERS = {
-            "assets": self.get_assets,
-            "queues": self.get_queues,
-            "storage_buckets": self.get_storage_buckets,
-        }
-
-        if resource_type not in RESOURCE_GETTERS:
-            raise ValueError(f"Unsupported resource_type: {resource_type}")
-
-        getter = RESOURCE_GETTERS[resource_type]
+        getter = self._resource_getters[ResourceTypes(linkable_resource_type)]
 
         # --------------------------------------------------
         # Step 1: Fetch folders and build folder lookup
@@ -930,7 +996,6 @@ class OrchestratorClient:
         all_folders = await self.get_folders()
         by_id = {f["Id"]: f for f in all_folders}
 
-        # Precompute folder paths (avoid rebuilding repeatedly)
         def build_path(fid: int) -> str:
             parts = []
             current = by_id.get(fid)
@@ -948,13 +1013,12 @@ class OrchestratorClient:
         # Step 2: Concurrently fetch items in all folders
         # --------------------------------------------------
         folder_ids = [f["Id"] for f in all_folders]
-        tasks = [getter(fid) for fid in folder_ids]
+        results = await asyncio.gather(
+            *[getter(fid) for fid in folder_ids],
+            return_exceptions=True
+        )
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Only track IDs we actually care about
         target_ids: Set[int] = {item["Id"] for item in items}
-
         links: Dict[int, Set[str]] = {}
 
         for fid, folder_items in zip(folder_ids, results):
@@ -965,27 +1029,16 @@ class OrchestratorClient:
 
             for item in folder_items:
                 rid = item["Id"]
-
                 if rid in target_ids:
                     links.setdefault(rid, set()).add(path)
 
         # --------------------------------------------------
         # Step 3: Attach LinkedFolders
         # --------------------------------------------------
-        enhanced = []
-
-        for item in items:
-            rid = item.get("Id")
-
-            enhanced_item = dict(item)
-            enhanced_item["LinkedFolders"] = sorted(
-                links.get(rid, [])
-            )
-
-            enhanced.append(enhanced_item)
-
-        return enhanced
-
+        return [
+            {**item, "LinkedFolders": sorted(links.get(item["Id"], []))}
+            for item in items
+        ]
     # -------------------------------------------------------------------------
     # NuGet helpers
     # -------------------------------------------------------------------------

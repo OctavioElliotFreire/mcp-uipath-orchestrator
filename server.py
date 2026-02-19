@@ -9,7 +9,7 @@
 
 import json
 from mcp.server.fastmcp import FastMCP
-from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,ResourceTypes)
+from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,ResourceTypes,LinkableResourceTypes)
 from typing import  Dict,Optional,Any,List
 from dateutil import parser as dateutil_parser
 
@@ -41,7 +41,7 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 # MCP Server
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("uipath-orchestrator")
+mcp = FastMCP("uipath-orchestrator2")
 
 # -----------------------------------------------------------------------------
 # DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
@@ -286,7 +286,7 @@ async def ensure_resource_in_folder(resource_type: ResourceTypes,folder_path: st
         }, indent=2)
     
 @mcp.tool()
-async def link_resource_to_folder(resource_type: ResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,account: str,tenant: str,expected_value_type: Optional[str] = None) -> str:
+async def link_resource_to_folder(linkable_resource_type: LinkableResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,account: str,tenant: str,expected_value_type: Optional[str] = None) -> str:
     """
     Link an existing shared resource into a target folder.
 
@@ -303,12 +303,12 @@ async def link_resource_to_folder(resource_type: ResourceTypes,resource_name: st
 
     Matching behavior:
       - Resource is matched by Name.
-      - If resource_type == ResourceTypes.assets and expected_value_type is provided,
+      - If linkable_resource_type == LinkableResourceTypes.assets and expected_value_type is provided,
         ValueType must also match.
       - Stops after the first successful match.
 
     Parameters:
-      - resource_type: allowed values: "assets", "queues", "storage_buckets"
+      - linkable_resource_type: allowed values: "assets", "queues", "storage_buckets"
       - resource_name: Name of the resource to locate.
       - candidate_folder_paths: Ordered list of folders to search.
       - target_folder_path: Folder to link the resource into.
@@ -328,7 +328,7 @@ async def link_resource_to_folder(resource_type: ResourceTypes,resource_name: st
     client = await get_client(account, tenant)
 
     result = await client.link_resource_to_folder(
-        resource_type=resource_type,
+        linkable_resource_type=linkable_resource_type,
         resource_name=resource_name,
         candidate_folder_paths=candidate_folder_paths,
         target_folder_path=target_folder_path,
