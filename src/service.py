@@ -151,29 +151,7 @@ class OrchestratorClient:
     - Normalizes OData responses
     - Returns clean domain objects
     """
-    RESOURCE_REGISTRY = {
-        "assets": {
-            "getter": "get_assets",
-            "create_endpoint": "odata/Assets",
-            "share_endpoint": "odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
-            "id_field": "AssetIds",
-            "payload_builder": "_build_asset_payload",
-        },
-            "queues": {
-                "getter": "get_queues",
-                "create_endpoint": "odata/QueueDefinitions",
-                "share_endpoint": "odata/QueueDefinitions/UiPath.Server.Configuration.OData.ShareToFolders",
-                "id_field": "QueueIds",
-                "payload_builder": "_build_queue_payload",
-            },
-        "storage_buckets": {
-            "getter": "get_storage_buckets",
-            "create_endpoint": "odata/Buckets",
-            "share_endpoint": "odata/Buckets/UiPath.Server.Configuration.OData.ShareToFolders",
-            "id_field": "BucketIds",
-            "payload_builder": "_build_storage_bucket_payload",
-        },
-}
+
 
         # ----------------------------------------
     
@@ -730,7 +708,7 @@ class OrchestratorClient:
         }
         """
 
-        config = self.RESOURCE_REGISTRY[linkable_resource_type]
+        config = linkable_resource_type.config
         getter = self._resource_getters[linkable_resource_type.to_resource_type()]
 
         # Resolve target folder
@@ -767,13 +745,13 @@ class OrchestratorClient:
                         continue
 
                 payload = {
-                    config["id_field"]: [resource["Id"]],
+                    config.id_field: [resource["Id"]],
                     "toAddFolderIds": [target_folder_id],
                     "toRemoveFolderIds": [],
                 }
 
                 try:
-                    await self.post(config["share_endpoint"], payload)
+                    await self.post(config.share_endpoint, payload)
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code != 409:
                         raise
@@ -900,44 +878,7 @@ class OrchestratorClient:
 # Ensure resource exists (create-only policy)
 # -------------------------------------------------------------------------
 
-    async def ensure_resource_in_folder2(self,resource_type: ResourceTypes,folder_path: str,resource_spec: dict) -> dict:
-
-        if resource_type not in self.RESOURCE_REGISTRY:
-            raise ValueError(f"Unsupported resource_type: {resource_type}")
-
-        config = self.RESOURCE_REGISTRY[resource_type]
-
-        name = resource_spec.get("Name")
-        if not name:
-            raise ValueError("resource_spec must include 'Name'")
-
-        # Resolve folder
-        folder = await self.ensure_folder_path(folder_path)
-        folder_id = folder["Id"]
-
-        # Get existing resources
-        getter = getattr(self, config["getter"])
-        existing_items = await getter(folder_id)
-
-        existing = next(
-            (r for r in existing_items if r["Name"] == name),
-            None
-        )
-
-        if existing:
-            return existing
-
-        # Build payload dynamically
-        builder = getattr(self, config["payload_builder"])
-        payload = await builder(resource_spec)
-
-        # Create resource
-        return await self.post(
-            config["create_endpoint"],
-            payload,
-            folder_id=folder_id,
-        )
-        
+       
     async def ensure_resource_in_folder(
         self,
         linkable_resource_type: LinkableResourceTypes,
