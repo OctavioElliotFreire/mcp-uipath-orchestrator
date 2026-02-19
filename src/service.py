@@ -44,6 +44,13 @@ class QueueItemStatus(str, Enum):
     Abandoned = "Abandoned"
     Deleted = "Deleted"
 
+class ResourceTypes(str, Enum):
+    assets = "assets"
+    queues = "queues"
+    processes = "processes"
+    triggers = "triggers"
+    storage_buckets = "storage_buckets"
+    
 
 # -------------------------------------------------------------------------
 # Central Resource Registry
@@ -600,27 +607,27 @@ class OrchestratorClient:
     # -------------------------------------------------------------------------
     # Consolidated folder-scoped resource fetch
     # -------------------------------------------------------------------------
-
-    async def get_resources(self,resource_types: list[str],folder_id: int) -> dict[str, list | dict]:
+    async def get_resources(self,resource_types: list[ResourceTypes],folder_id: int) -> dict[str, list | dict]:
 
         VALID_RESOURCE_TYPES = {
-            "assets": self.get_assets,
-            "queues": self.get_queues,
-            "processes": self.get_processes,
-            "triggers": self.get_triggers,
-            "storage_buckets": self.get_storage_buckets,
+            ResourceTypes.assets: self.get_assets,
+            ResourceTypes.queues: self.get_queues,
+            ResourceTypes.processes: self.get_processes,
+            ResourceTypes.triggers: self.get_triggers,
+            ResourceTypes.storage_buckets: self.get_storage_buckets,
         }
 
-        LINKABLE_TYPES = {"assets", "queues", "storage_buckets"}
+        LINKABLE_TYPES = {
+            ResourceTypes.assets,
+            ResourceTypes.queues,
+            ResourceTypes.storage_buckets,
+        }
 
         if not resource_types:
             raise ValueError("resource_types cannot be empty")
 
-        invalid = [rt for rt in resource_types if rt not in VALID_RESOURCE_TYPES]
-        if invalid:
-            raise ValueError(f"Invalid resource_types: {invalid}")
+        # No need for manual validation anymore — Pydantic/enum handles it!
 
-        # Step 1: Fetch requested resources
         tasks = {
             rt: VALID_RESOURCE_TYPES[rt](folder_id)
             for rt in resource_types
@@ -631,21 +638,16 @@ class OrchestratorClient:
         response: dict[str, list | dict] = {}
 
         for resource_type, result in zip(tasks.keys(), results):
-
             if isinstance(result, Exception):
-                response[resource_type] = {"error": str(result)}
+                response[resource_type.value] = {"error": str(result)}
                 continue
 
             items = result or []
 
-            # Automatically attach linked folders
             if resource_type in LINKABLE_TYPES:
-                items = await self._attach_linked_folders(
-                    items,
-                    resource_type
-                )
+                items = await self._attach_linked_folders(items, resource_type.value)
 
-            response[resource_type] = items
+            response[resource_type.value] = items
 
         return response
 
@@ -655,14 +657,8 @@ class OrchestratorClient:
 # Generic cross-folder linker
 # -------------------------------------------------------------------------
 
-    async def link_resource_to_folder(
-        self,
-        resource_type: str,
-        resource_name: str,
-        candidate_folder_paths: list[str],
-        target_folder_path: str,
-        expected_value_type: Optional[str] = None,
-    ) -> dict:
+   
+    async def link_resource_to_folder(self,resource_type: ResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,expected_value_type: Optional[str] = None) -> dict:
         """
         Link an existing shared resource into a target folder.
 
@@ -674,7 +670,7 @@ class OrchestratorClient:
 
         Matching behavior:
         - Resource is matched by Name.
-        - If resource_type == "assets" and expected_value_type is provided,
+        - If resource_type == ResourceTypes.assets and expected_value_type is provided,
             ValueType must also match.
         - Stops after the first successful match.
 
@@ -724,12 +720,12 @@ class OrchestratorClient:
 
             for resource in resources:
 
-                # 1️⃣ Match by Name
+                # Match by Name
                 if resource.get("Name") != resource_name:
                     continue
 
-                # 2️⃣ If assets and expected_value_type provided, validate ValueType
-                if resource_type == "assets" and expected_value_type:
+                # If assets and expected_value_type provided, validate ValueType
+                if resource_type == ResourceTypes.assets and expected_value_type:
                     if resource.get("ValueType") != expected_value_type:
                         continue
 
@@ -759,7 +755,6 @@ class OrchestratorClient:
             "linked_to": None,
             "reason": "no_matching_candidate_folder",
         }
-
     # -------------------------------------------------------------------------
     # Folder management
     # -------------------------------------------------------------------------
@@ -865,11 +860,11 @@ class OrchestratorClient:
         return current_folder
     
     
-    # -------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Ensure resource exists (create-only policy)
 # -------------------------------------------------------------------------
 
-    async def ensure_resource_in_folder(self,resource_type: str,folder_path: str,resource_spec: dict) -> dict:
+    async def ensure_resource_in_folder(self,resource_type: ResourceTypes,folder_path: str,resource_spec: dict) -> dict:
 
         if resource_type not in self.RESOURCE_REGISTRY:
             raise ValueError(f"Unsupported resource_type: {resource_type}")
@@ -906,7 +901,7 @@ class OrchestratorClient:
             payload,
             folder_id=folder_id,
         )
-    
+        
     async def _attach_linked_folders(self,items: List[dict],resource_type: str) -> List[dict]:
         """
         Optimized version:

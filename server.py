@@ -9,12 +9,12 @@
 
 import json
 from mcp.server.fastmcp import FastMCP
-from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
-from typing import  Dict,Optional
-from src.service import QueueItemStatus
-from typing import List
-from datetime import datetime
+from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,ResourceTypes)
+from typing import  Dict,Optional,Any,List
 from dateutil import parser as dateutil_parser
+
+
+
 
 # -----------------------------------------------------------------------------
 # Client cache (one client per account/tenant, shared token)
@@ -153,9 +153,11 @@ async def list_folders(account: str, tenant: str) -> str:
 # -----------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_folder_resources(resource_types: list[str], account: str, tenant: str, folder_id: int) -> str:
+async def get_folder_resources(resource_types: list[ResourceTypes], account: str, tenant: str, folder_id: int) -> str:
     """
     Fetch one or more UiPath Orchestrator resource types from a folder.
+
+    Allowed resource_types: "assets", "queues", "processes", "triggers", "storage_buckets"
 
     This tool intentionally returns a JSON object where:
       - list  => successful fetch
@@ -180,10 +182,7 @@ async def get_folder_resources(resource_types: list[str], account: str, tenant: 
         folder_id=folder_id
     )
 
-    # MCP tools must return strings; JSON is returned verbatim so the LLM
-    # can reason directly over the response structure.
     return json.dumps(result, indent=2)
-
 
 @mcp.tool()
 async def download_library_version(account: str,tenant: str,package_id: str,version: str) -> str:
@@ -251,14 +250,13 @@ async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str
         }, indent=2)
 
 
-from typing import Dict, Any
-import json
-
 
 @mcp.tool()
-async def ensure_resource_in_folder(resource_type: str,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
+async def ensure_resource_in_folder(resource_type: ResourceTypes,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """
     Ensure that a resource exists inside a specific folder.
+
+    Allowed resource_types: "assets", "queues", "processes", "triggers", "storage_buckets"
 
     This tool follows a create-only, idempotent policy:
       - If a resource with the same Name already exists in the folder,
@@ -286,11 +284,9 @@ async def ensure_resource_in_folder(resource_type: str,folder_path: str,resource
             "status": "error",
             "message": str(e)
         }, indent=2)
-
-
-
+    
 @mcp.tool()
-async def link_resource_to_folder(resource_type: str, resource_name: str, candidate_folder_paths: list[str], target_folder_path: str, account: str, tenant: str, expected_value_type: Optional[str] = None) -> str:
+async def link_resource_to_folder(resource_type: ResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,account: str,tenant: str,expected_value_type: Optional[str] = None) -> str:
     """
     Link an existing shared resource into a target folder.
 
@@ -307,12 +303,12 @@ async def link_resource_to_folder(resource_type: str, resource_name: str, candid
 
     Matching behavior:
       - Resource is matched by Name.
-      - If resource_type == "assets" and expected_value_type is provided,
+      - If resource_type == ResourceTypes.assets and expected_value_type is provided,
         ValueType must also match.
       - Stops after the first successful match.
 
     Parameters:
-      - resource_type: "assets", "queues", or "storage_buckets"
+      - resource_type: allowed values: "assets", "queues", "storage_buckets"
       - resource_name: Name of the resource to locate.
       - candidate_folder_paths: Ordered list of folders to search.
       - target_folder_path: Folder to link the resource into.
@@ -342,19 +338,35 @@ async def link_resource_to_folder(resource_type: str, resource_name: str, candid
     return json.dumps(result, indent=2)
 
 @mcp.tool()
-async def get_queue_items(
-    account: str,
-    tenant: str,
-    queue_id: int,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    statuses: Optional[List[QueueItemStatus]] = None,
-    reference: Optional[str] = None
-) -> str:
+async def get_queue_items(account: str,tenant: str,queue_id: int,start_time: Optional[str] = None,end_time: Optional[str] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> str:
     """
-    ...
-    - start_time / end_time: any common date format (e.g. "2025-01-01", "01/01/2025", "2025-01-01T00:00:00Z")
-    ...
+    Retrieve queue items for a specific UiPath queue.
+
+    This tool automatically resolves the folder from the queue ID.
+    Folder ID is NOT required.
+
+    Args:
+      - account: UiPath account name
+      - tenant: UiPath tenant name
+      - queue_id: ID of the queue to retrieve items from
+      - start_time: filter items created after this date (any format, e.g. "2025-01-01", "01/01/2025", "2025-01-01T00:00:00Z")
+      - end_time: filter items created before this date (any format, e.g. "2025-12-31", "31/12/2025", "2025-12-31T23:59:59Z")
+      - statuses: filter by status. Allowed values: "New", "InProgress", "Failed", "Successful", "Abandoned", "Retried"
+      - reference: filter by exact reference match
+
+    Returns:
+      {
+        "status": "ok",
+        "queue_id": int,
+        "count": int,
+        "items": [...]
+      }
+
+    On failure:
+      {
+        "status": "error",
+        "message": "..."
+      }
     """
 
     client = await get_client(account, tenant)
