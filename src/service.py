@@ -289,7 +289,7 @@ class OrchestratorClient:
     async def get_queues(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
     
-    async def _resolve_folder_from_queue2(self, queue_id: int) -> int:
+    async def _resolve_folder_from_queue(self, queue_id: int) -> int:
         """
         Resolve folder_id from queue_id by scanning folders.
         Required in modern folder tenants where QueueDefinitions is folder-scoped.
@@ -327,14 +327,7 @@ class OrchestratorClient:
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-    async def get_queue_items(
-        self,
-        queue_id: int,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-        statuses: Optional[List[QueueItemStatus]] = None,
-        reference: Optional[str] = None,
-    ) -> List[Dict]:
+    async def get_queue_items(self,queue_id: int,start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> List[Dict]:
 
         if not queue_id:
             raise ValueError("queue_id is required")
