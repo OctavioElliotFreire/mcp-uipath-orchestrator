@@ -41,7 +41,7 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 # MCP Server
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("uipath-orchestrator2")
+mcp = FastMCP("uipath-orchestrator")
 
 # -----------------------------------------------------------------------------
 # DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
@@ -252,7 +252,7 @@ async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str
 
 
 @mcp.tool()
-async def ensure_resource_in_folder(resource_type: ResourceTypes,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
+async def ensure_resource_in_folder(resource_type:LinkableResourceTypes,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """
     Ensure that a resource exists inside a specific folder.
 
@@ -267,9 +267,11 @@ async def ensure_resource_in_folder(resource_type: ResourceTypes,folder_path: st
 
     client = await get_client(account, tenant)
 
+
+    
     try:
         resource = await client.ensure_resource_in_folder(
-            resource_type=resource_type,
+            linkable_resource_type=resource_type,
             folder_path=folder_path,
             resource_spec=resource_spec,
         )
@@ -324,7 +326,7 @@ async def link_resource_to_folder(linkable_resource_type: LinkableResourceTypes,
         "reason": str | null
       }
     """
-
+    
     client = await get_client(account, tenant)
 
     result = await client.link_resource_to_folder(

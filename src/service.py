@@ -879,11 +879,7 @@ class OrchestratorClient:
 # -------------------------------------------------------------------------
 
        
-    async def ensure_resource_in_folder(
-        self,
-        linkable_resource_type: LinkableResourceTypes,
-        folder_path: str,
-        resource_spec: dict
+    async def ensure_resource_in_folder(self,linkable_resource_type: LinkableResourceTypes, folder_path: str, resource_spec: dict
     ) -> dict:
 
         name = resource_spec.get("Name")
@@ -893,6 +889,8 @@ class OrchestratorClient:
         config = linkable_resource_type.config
         getter = self._resource_getters[linkable_resource_type.to_resource_type()]
 
+        
+             
         # Resolve folder
         folder = await self.ensure_folder_path(folder_path)
         folder_id = folder["Id"]
