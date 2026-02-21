@@ -986,7 +986,6 @@ if __name__ == "__main__":
 
      #asyncio.run(test_connection())
      #asyncio.run(test_get_folders_tree_multi_tenant())
-     #asyncio.run(test_get_assets_multi_tenant())
      #asyncio.run(test_folder_collections("get_queues", "Queues"))
      #asyncio.run(test_folder_collections("get_triggers", "Triggers"))
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
@@ -994,11 +993,11 @@ if __name__ == "__main__":
      #asyncio.run(test_download_library_version())
      #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
-     asyncio.run(test_ensure_resources_local())
+     #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
-     #asyncio.run(test_download_storage_file())
-     #asyncio.run(test_get_queue_items())
-     #asyncio.run(test_resolve_folder_from_queue())
+     asyncio.run(test_download_storage_file())
+     asyncio.run(test_get_queue_items())
+     asyncio.run(test_resolve_folder_from_queue())
 
   
 
