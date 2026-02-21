@@ -252,7 +252,7 @@ async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str
 
 
 @mcp.tool()
-async def ensure_resource_in_folder(resource_type:LinkableResourceTypes,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
+async def ensure_resource_in_folder(resource_type:str,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """
     Ensure that a resource exists inside a specific folder.
 
@@ -264,14 +264,15 @@ async def ensure_resource_in_folder(resource_type:LinkableResourceTypes,folder_p
       - If it does not exist, it is created.
       - Existing resources are never updated or overwritten.
     """
-
+    linkable_resource_type = LinkableResourceTypes(resource_type)
     client = await get_client(account, tenant)
 
 
     
+    
     try:
         resource = await client.ensure_resource_in_folder(
-            linkable_resource_type=resource_type,
+            linkable_resource_type=linkable_resource_type,
             folder_path=folder_path,
             resource_spec=resource_spec,
         )
@@ -288,7 +289,7 @@ async def ensure_resource_in_folder(resource_type:LinkableResourceTypes,folder_p
         }, indent=2)
     
 @mcp.tool()
-async def link_resource_to_folder(linkable_resource_type: LinkableResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,account: str,tenant: str,expected_value_type: Optional[str] = None) -> str:
+async def link_resource_to_folder(resource_type: str,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,account: str,tenant: str,expected_value_type: Optional[str] = None) -> str:
     """
     Link an existing shared resource into a target folder.
 
@@ -326,7 +327,8 @@ async def link_resource_to_folder(linkable_resource_type: LinkableResourceTypes,
         "reason": str | null
       }
     """
-    
+    linkable_resource_type = LinkableResourceTypes(resource_type)
+
     client = await get_client(account, tenant)
 
     result = await client.link_resource_to_folder(
