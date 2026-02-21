@@ -976,112 +976,6 @@ async def test_resolve_folder_from_queue():
         await client.close()
 
 
-    print("\n" + "=" * 60)
-    print("TEST: _resolve_folder_from_resource()")
-    print("=" * 60)
-
-    pairs = get_all_account_tenant_pairs()
-
-    if not pairs:
-        print("No account/tenant configured.")
-        return False
-
-    account, tenant = pairs[0]
-    print(f"Using: {account}/{tenant}")
-
-    client = OrchestratorClient(account, tenant)
-
-    try:
-        await client.authenticate()
-
-        # ------------------------------------------------
-        # STEP 1: Get folders
-        # ------------------------------------------------
-        folders = await client.get_folders()
-
-        if not folders:
-            print("No folders found.")
-            return False
-
-        folder = folders[0]
-        folder_id = folder["Id"]
-
-        print(f"\n📁 Folder: {folder['DisplayName']} ({folder_id})")
-
-        # ------------------------------------------------
-        # STEP 2: Test QUEUE resolution
-        # ------------------------------------------------
-        queues = await client.get_queues(folder_id)
-
-        if queues:
-            queue = queues[0]
-            queue_id = queue["Id"]
-
-            print(f"\n🎯 Testing queue resolution: {queue['Name']} ({queue_id})")
-
-            resolved_folder_id = await client._resolve_folder_from_resource(
-                "queues",
-                queue_id
-            )
-
-            print(f"Resolved folder_id: {resolved_folder_id}")
-
-            if resolved_folder_id == folder_id:
-                print("✓ Queue folder resolution correct")
-            else:
-                print("✗ Queue folder resolution incorrect")
-                return False
-        else:
-            print("No queues found to test.")
-
-        # ------------------------------------------------
-        # STEP 3: Test ASSET resolution
-        # ------------------------------------------------
-        assets = await client.get_assets(folder_id)
-
-        if assets:
-            asset = assets[0]
-            asset_id = asset["Id"]
-
-            print(f"\n📦 Testing asset resolution: {asset['Name']} ({asset_id})")
-
-            resolved_folder_id = await client._resolve_folder_from_resource(
-                "assets",
-                asset_id
-            )
-
-            print(f"Resolved folder_id: {resolved_folder_id}")
-
-            if resolved_folder_id == folder_id:
-                print("✓ Asset folder resolution correct")
-            else:
-                print("✗ Asset folder resolution incorrect")
-                return False
-        else:
-            print("No assets found to test.")
-
-        # ------------------------------------------------
-        # STEP 4: Negative test
-        # ------------------------------------------------
-        print("\n🚫 Testing invalid resource id")
-
-        try:
-            await client._resolve_folder_from_resource("queues", 999999999)
-            print("✗ Expected failure but succeeded")
-            return False
-        except RuntimeError as e:
-            print(f"✓ Expected error: {e}")
-
-        return True
-
-    except Exception as e:
-        print(f"✗ Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-    finally:
-        await client.close()
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -1092,7 +986,6 @@ if __name__ == "__main__":
 
      #asyncio.run(test_connection())
      #asyncio.run(test_get_folders_tree_multi_tenant())
-     #asyncio.run(test_get_assets_multi_tenant())
      #asyncio.run(test_folder_collections("get_queues", "Queues"))
      #asyncio.run(test_folder_collections("get_triggers", "Triggers"))
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
@@ -1100,11 +993,11 @@ if __name__ == "__main__":
      #asyncio.run(test_download_library_version())
      #asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
-     asyncio.run(test_ensure_resources_local())
+     #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
-     #asyncio.run(test_download_storage_file())
-     #asyncio.run(test_get_queue_items())
-     #asyncio.run(test_resolve_folder_from_queue())
+     asyncio.run(test_download_storage_file())
+     asyncio.run(test_get_queue_items())
+     asyncio.run(test_resolve_folder_from_queue())
 
   
 
