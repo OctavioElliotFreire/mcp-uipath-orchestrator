@@ -266,7 +266,7 @@ async def ensure_resource_in_folder(resource_type:str,folder_path: str,resource_
     """
     linkable_resource_type = LinkableResourceTypes(resource_type)
     client = await get_client(account, tenant)
-
+    
 
     
     
