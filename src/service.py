@@ -7,6 +7,7 @@ from typing import List, Dict, Set,Optional,TypedDict,NamedTuple
 import uuid 
 from enum import Enum
 from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
 
 
 # -----------------------------------------------------------------------------
@@ -94,7 +95,10 @@ class LinkableResourceTypes(str, Enum):
     def to_resource_type(self) -> ResourceTypes:
         return ResourceTypes(self.value)
 
-
+@dataclass(frozen=True)
+class OrchestratorClientSettings:
+    max_internal_return: int = 100
+    uipath_page_size: int = 100
 
 
 
@@ -158,7 +162,7 @@ class OrchestratorClient:
     
 
 
-    def __init__(self, account: str, tenant: str):
+    def __init__(self, account: str, tenant: str):  
         if account not in CONFIG["accounts"]:
             raise RuntimeError(f"Account '{account}' not found")
 
@@ -169,6 +173,7 @@ class OrchestratorClient:
 
         self.account = account
         self.tenant = tenant
+        self.settings = OrchestratorClientSettings()
         self.base_url = account_cfg["base_url"]
         self.download_dir = account_cfg["download_dir"]
         self.client_id = account_cfg["auth"]["client_id"]
@@ -178,7 +183,7 @@ class OrchestratorClient:
             "username": "mcp_default_user",
             "password": "DefaultPassword123!"
         }
-
+        
 
         self._access_token: str | None = None
 
@@ -358,19 +363,25 @@ class OrchestratorClient:
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-    async def get_queue_items(self,queue_id: int,start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> List[Dict]:
+    async def get_queue_items(
+        self,
+        queue_id: int,
+        skip: int = 0,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        statuses: Optional[List[QueueItemStatus]] = None,
+        reference: Optional[str] = None,
+    ) -> Dict:
 
         if not queue_id:
             raise ValueError("queue_id is required")
 
-        # --------------------------------------------------
-        # STEP 1: Resolve folder automatically
-        # --------------------------------------------------
+        max_internal = self.settings.max_internal_return
+        page_size = self.settings.uipath_page_size
+
         folder_id = await self._resolve_folder_from_queue(queue_id)
 
-        # --------------------------------------------------
-        # STEP 2: Cloud-safe default 30-day window
-        # --------------------------------------------------
+        # Default 30-day window
         if not start_time and not end_time:
             end_time = datetime.now(timezone.utc)
             start_time = end_time - timedelta(days=30)
@@ -392,7 +403,7 @@ class OrchestratorClient:
                 filters.append(f"Status eq '{statuses[0].value}'")
             else:
                 status_filter = " or ".join(
-                    [f"Status eq '{s.value}'" for s in statuses]
+                    f"Status eq '{s.value}'" for s in statuses
                 )
                 filters.append(f"({status_filter})")
 
@@ -401,34 +412,63 @@ class OrchestratorClient:
 
         filter_query = " and ".join(filters)
 
-        skip = 0
-        PAGE_SIZE = 100
-        all_items: List[Dict] = []
+        collected: List[Dict] = []
+        internal_skip = skip
+        total_available: Optional[int] = None
 
-        while True:
+        # -----------------------------------------
+        # Internal pagination (UiPath side)
+        # -----------------------------------------
+        while len(collected) < max_internal:
+
+            remaining = max_internal - len(collected)
+            top = min(page_size, remaining)
+
             endpoint = (
                 f"odata/QueueItems"
-                f"?$top={PAGE_SIZE}"
-                f"&$skip={skip}"
+                f"?$top={top}"
+                f"&$skip={internal_skip}"
+                f"&$count=true"
                 f"&$filter={filter_query}"
             )
 
-            # IMPORTANT: pass resolved folder_id
             response = await self.get(endpoint, folder_id=folder_id)
 
-            items = self._unwrap_odata(response)
-            all_items.extend(items)
+            if total_available is None:
+                total_available = response.get("@odata.count")
 
+            items = self._unwrap_odata(response)
+
+            if not items:
+                break
+
+            collected.extend(items)
+            internal_skip += len(items)
+
+            # If searching by reference, only one result expected
             if reference:
                 break
 
-            if len(items) < PAGE_SIZE:
+            # Stop if UiPath returned fewer than requested
+            if len(items) < top:
                 break
 
-            skip += PAGE_SIZE
+        returned = len(collected)
+        next_skip = skip + returned
 
-        return all_items
+        has_more = (
+            total_available is not None and next_skip < total_available
+        )
 
+        return {
+            "total_available": total_available,
+            "returned": returned,
+            "skip": skip,
+            "next_skip": next_skip if has_more else None,
+            "has_more": has_more,
+            "limit": max_internal,
+            "items": collected,
+        }
     async def get_triggers(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
 

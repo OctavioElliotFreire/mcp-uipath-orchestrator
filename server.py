@@ -342,35 +342,33 @@ async def link_resource_to_folder(resource_type: str,resource_name: str,candidat
     return json.dumps(result, indent=2)
 
 @mcp.tool()
-async def get_queue_items(account: str,tenant: str,queue_id: int,start_time: Optional[str] = None,end_time: Optional[str] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> str:
+async def get_queue_items(account: str,tenant: str,skip: int,queue_id: int,start_time: Optional[str] = None,end_time: Optional[str] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> str:
     """
-    Retrieve queue items for a specific UiPath queue.
+    Retrieve items from a UiPath Orchestrator queue.
 
-    This tool automatically resolves the folder from the queue ID.
-    Folder ID is NOT required.
+    The folder is automatically resolved from the queue ID — no folder ID required.
+
+    Supports filtering by:
+    - Creation date range (start_time, end_time)
+    - Status (New, InProgress, Failed, Successful, Abandoned, Retried)
+    - Exact reference match
 
     Args:
-      - account: UiPath account name
-      - tenant: UiPath tenant name
-      - queue_id: ID of the queue to retrieve items from
-      - start_time: filter items created after this date (any format, e.g. "2025-01-01", "01/01/2025", "2025-01-01T00:00:00Z")
-      - end_time: filter items created before this date (any format, e.g. "2025-12-31", "31/12/2025", "2025-12-31T23:59:59Z")
-      - statuses: filter by status. Allowed values: "New", "InProgress", "Failed", "Successful", "Abandoned", "Retried"
-      - reference: filter by exact reference match
+        account (str): UiPath account name
+        tenant (str): UiPath tenant name
+        skip (int): Number of records to skip (pagination)
+        queue_id (int): Queue ID
+        start_time (Optional[str]): Created after this date (flexible format)
+        end_time (Optional[str]): Created before this date (flexible format)
+        statuses (Optional[List[str]]): List of allowed status values
+        reference (Optional[str]): Exact reference filter
 
     Returns:
-      {
-        "status": "ok",
-        "queue_id": int,
-        "count": int,
-        "items": [...]
-      }
-
-    On failure:
-      {
-        "status": "error",
-        "message": "..."
-      }
+        JSON string with:
+        - status ("ok" or "error")
+        - queue_id
+        - count
+        - items (list of queue items)
     """
 
     client = await get_client(account, tenant)
@@ -385,6 +383,7 @@ async def get_queue_items(account: str,tenant: str,queue_id: int,start_time: Opt
         )
 
         items = await client.get_queue_items(
+            skip=skip,
             queue_id=queue_id,
             start_time=parsed_start,
             end_time=parsed_end,

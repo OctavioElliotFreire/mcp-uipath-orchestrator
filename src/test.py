@@ -258,6 +258,7 @@ async def test_get_resources():
     finally:
         await client.close()
 
+
 async def test_get_queue_items():
     print("\n" + "=" * 60)
     print("TEST: get_queue_items() — ALL QUEUES")
@@ -312,13 +313,33 @@ async def test_get_queue_items():
                 print(f"\n🎯 Queue: {queue_name} ({queue_id})")
 
                 try:
-                    items = await client.get_queue_items(
-                        queue_id=queue_id
-                    )
+                    skip = 0
+                    queue_total = 0
 
-                    print(f"   → Returned {len(items)} items")
+                    while True:
+                        result = await client.get_queue_items(
+                            queue_id=queue_id,
+                            skip=skip
+                        )
 
-                    total_items_across_all_queues += len(items)
+                        items = result["items"]
+                        returned = result["returned"]
+
+                        print(
+                            f"   → Page returned {returned} items "
+                            f"(skip={skip})"
+                        )
+
+                        queue_total += returned
+
+                        if not result["has_more"]:
+                            break
+
+                        skip = result["next_skip"]
+
+                    print(f"   ✓ Total fetched for queue: {queue_total}")
+
+                    total_items_across_all_queues += queue_total
 
                 except Exception as e:
                     print(f"   ✗ Failed to fetch items: {e}")
@@ -337,7 +358,6 @@ async def test_get_queue_items():
 
     finally:
         await client.close()
-
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
     print("TEST: Ensure + Resolve Folder Path")
@@ -995,9 +1015,9 @@ if __name__ == "__main__":
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
-     asyncio.run(test_download_storage_file())
+     #asyncio.run(test_download_storage_file())
      asyncio.run(test_get_queue_items())
-     asyncio.run(test_resolve_folder_from_queue())
+     #asyncio.run(test_resolve_folder_from_queue())
 
   
 
