@@ -249,8 +249,6 @@ async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str
             "message": str(e)
         }, indent=2)
 
-
-
 @mcp.tool()
 async def ensure_resource_in_folder(resource_type:str,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """

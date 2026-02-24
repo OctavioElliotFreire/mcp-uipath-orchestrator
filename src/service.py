@@ -1184,7 +1184,7 @@ class OrchestratorClient:
 
         url = (
             f"{self.base_url}{self.account}/{self.tenant}/orchestrator_"
-            f"/odata/Processes/UiPath.Server.Configuration.OData.UploadPackage"
+            f"/odata/Libraries/UiPath.Server.Configuration.OData.UploadPackage"
         )
 
         with open(package_path, "rb") as f:
@@ -1208,10 +1208,93 @@ class OrchestratorClient:
             return {"status": "uploaded", "package": package_path.name}
 
         return r.json()
+    
+    @staticmethod
+    def get_dependencies_from_file(nupkg_path: Path | str) -> dict:
+        """
+        Extract metadata and dependencies from a local .nupkg file.
+        No API calls needed.
+        """
+        import zipfile
+        import xml.etree.ElementTree as ET
+        import re
+
+        nupkg_path = Path(nupkg_path)
+
+        if not nupkg_path.exists():
+            raise FileNotFoundError(f"Package not found: {nupkg_path}")
+
+        with zipfile.ZipFile(nupkg_path) as zf:
+            nuspec_name = next(
+                (n for n in zf.namelist() if n.endswith(".nuspec")), None
+            )
+            if not nuspec_name:
+                raise RuntimeError(f"No .nuspec found in {nupkg_path.name}")
+
+            nuspec_content = zf.read(nuspec_name).decode("utf-8")
+
+        root = ET.fromstring(nuspec_content)
+        ns = {"n": root.tag.split("}")[0].lstrip("{")} if "}" in root.tag else {"n": ""}
+
+        def get_text(tag: str) -> str:
+            el = root.find(f".//n:{tag}", ns)
+            return el.text.strip() if el is not None and el.text else ""
+
+        def classify_source(dep_id: str) -> str:
+            if dep_id.startswith(("UiPath.", "UiPathTeam.")):
+                return "uipath_official"
+            return "internal"
+
+        def classify_package_type(tags: str) -> str:
+            tags_lower = tags.lower()
+            if "uipathstudioprocess" in tags_lower:
+                return "process"
+            if "uipathstudioactivity" in tags_lower:
+                return "library"
+            return "unknown"
+
+        tags = get_text("tags")
+
+        dependencies = []
+        for group in root.findall(".//n:dependencies/n:group", ns):
+            framework = group.get("targetFramework", "any")
+            for dep in group.findall("n:dependency", ns):
+                raw_version = dep.get("version", "")
+                exact = raw_version.startswith("[") and raw_version.endswith("]")
+                dep_id = dep.get("id")
+                dependencies.append({
+                    "id": dep_id,
+                    "version": re.sub(r"[\[\]]", "", raw_version),
+                    "versionConstraint": "exact" if exact else "minimum",
+                    "targetFramework": framework,
+                    "source": classify_source(dep_id),
+                })
+
+        return {
+            "id": get_text("id"),
+            "version": get_text("version"),
+            "description": get_text("description"),
+            "authors": get_text("authors"),
+            "tags": tags,
+            "packageType": classify_package_type(tags),
+            "dependencies": dependencies,
+        }
+        
+
+
+
+    
+
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 
-
     async def close(self):
         await self.client.aclose()
+    
+
+
+
+
+
+    

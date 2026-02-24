@@ -1056,7 +1056,7 @@ async def test_upload_package_odata():
     folder_id = 733555
     client = OrchestratorClient(account, tenant)
 
-    package_path = Path(client.download_dir) / "UHCPendingClaims_Dispatcher.1.0.15.nupkg"
+    package_path = Path(client.download_dir) / "1password_API_Library.1.0.1.nupkg"
    
 
     try:
@@ -1088,6 +1088,166 @@ async def test_upload_package_odata():
     finally:
         await client.close()
 
+async def test_get_process_dependencies_api():
+    print("\n" + "=" * 60)
+    print("TEST: Get Process Dependencies via API only")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DEV"
+    folder_id = 278023
+    package_name = "UHCPendingClaims_Dispatcher"
+    version = "1.0.16"
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+        headers = {"Authorization": f"Bearer {client._access_token}"}
+        base = f"https://cloud.uipath.com/{account}/{tenant}/orchestrator_"
+        feed_id = "284fdd4a-d3e7-4b56-af20-30e1e786711b"
+
+        # Step 1: Read the NuGet index to see what resources are available
+        index_url = f"{base}/nuget/v3/{feed_id}/index.json"
+        r = await client.client.get(index_url, headers=headers)
+        print(f"\n[{r.status_code}] {index_url}")
+
+        if r.status_code != 200:
+            print("✗ Cannot reach NuGet index")
+            return False
+
+        resources = r.json().get("resources", [])
+        print(f"\nAvailable NuGet resources ({len(resources)}):")
+        for res in resources:
+            print(f"  {res.get('@type'):60s} {res.get('@id')}")
+
+        # Step 2: Find registration and flatcontainer base URLs from the index
+        def find_resource(rtype):
+            return next(
+                (res["@id"] for res in resources if rtype in res.get("@type", "")),
+                None,
+            )
+
+        registration_url = find_resource("RegistrationsBaseUrl")
+        flatcontainer_url = find_resource("PackageBaseAddress")
+
+        print(f"\nRegistrationsBaseUrl: {registration_url}")
+        print(f"PackageBaseAddress:   {flatcontainer_url}")
+
+        # Step 3: Try the actual endpoints using the URLs from the index
+        pkg = package_name.lower()
+        candidates = []
+
+        if registration_url:
+            candidates += [
+                f"{registration_url.rstrip('/')}/{pkg}/{version}.json",
+                f"{registration_url.rstrip('/')}/{pkg}/index.json",
+            ]
+
+        if flatcontainer_url:
+            candidates += [
+                f"{flatcontainer_url.rstrip('/')}/{pkg}/{version}/{pkg}.nuspec",
+            ]
+
+        for url in candidates:
+            r = await client.client.get(url, headers=headers)
+            print(f"\n[{r.status_code}] {url}")
+            if r.status_code == 200:
+                ct = r.headers.get("content-type", "")
+                if "json" in ct:
+                    print(f"  → {str(r.json())[:500]}")
+                else:
+                    print(f"  → {r.text[:500]}")
+
+    except Exception as e:
+        print(f"✗ {e}")
+        return False
+
+    finally:
+        await client.close()
+async def debug_nuspec():
+    account = "billiysusldx"
+    tenant = "DEV"
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+        headers = {"Authorization": f"Bearer {client._access_token}"}
+
+        url = (
+            "https://cloud.uipath.com/billiysusldx/DEV/orchestrator_"
+            "/nuget/v3/284fdd4ad3e74b56af2030e1e786711b"
+            "/packages/uhcpendingclaims_dispatcher/1.0.16"
+            "/uhcpendingclaims_dispatcher.nuspec"
+        )
+
+        r = await client.client.get(url, headers=headers)
+        r.raise_for_status()
+        print(r.text)  # full XML, no truncation
+
+    finally:
+        await client.close()
+
+async def test_get_dependencies_from_file():
+    print("\n" + "=" * 60)
+    print("TEST: Get Dependencies from .nupkg file")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+    account, tenant = pairs[0]
+    client = OrchestratorClient(account, tenant)
+
+    path = Path(client.download_dir) / "UHCPendingClaims_Dispatcher.1.0.16.nupkg"
+
+    print(f"File: {path}")
+
+    if not path.exists():
+        print("✗ File not found — run test_download_package_odata() first")
+        return False
+
+    try:
+        result = OrchestratorClient.get_dependencies_from_file(path)
+
+        if not result:
+            print("✗ No data returned")
+            return False
+
+        # Package info
+        print(f"\n📦 Package Info")
+        print(f"  ID:          {result['id']}")
+        print(f"  Version:     {result['version']}")
+        print(f"  Type:        {result['packageType'].upper()}")
+        print(f"  Authors:     {result['authors']}")
+        print(f"  Description: {result['description']}")
+
+        # Dependencies
+        deps = result["dependencies"]
+        if not deps:
+            print("\n  No dependencies found")
+            return True
+
+        internal = [d for d in deps if d["source"] == "internal"]
+        official = [d for d in deps if d["source"] == "uipath_official"]
+
+        print(f"\n📋 Dependencies ({len(deps)} total)")
+
+        if internal:
+            print(f"\n  Internal ({len(internal)}):")
+            for d in sorted(internal, key=lambda x: x["id"].lower()):
+                constraint = "==" if d["versionConstraint"] == "exact" else ">="
+                print(f"    ✦ {d['id']:<40} {constraint} {d['version']}")
+
+        if official:
+            print(f"\n  UiPath Official ({len(official)}):")
+            for d in sorted(official, key=lambda x: x["id"].lower()):
+                constraint = "==" if d["versionConstraint"] == "exact" else ">="
+                print(f"    · {d['id']:<40} {constraint} {d['version']}")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ {e}")
+        return False
 
 
 # -----------------------------------------------------------------------------
@@ -1104,15 +1264,18 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     asyncio.run(test_get_resources())
-     asyncio.run(test_ensure_folder_path())
-     asyncio.run(test_ensure_resources_local())
-     asyncio.run(test_link_resources_to_first_valid_folder())
-     asyncio.run(test_download_storage_file())
-     asyncio.run(test_get_queue_items())
+     #asyncio.run(test_get_resources())
+     #asyncio.run(test_ensure_folder_path())
+     #asyncio.run(test_ensure_resources_local())
+     #asyncio.run(test_link_resources_to_first_valid_folder())
+     #asyncio.run(test_download_storage_file())
+     #asyncio.run(test_get_queue_items())
      #asyncio.run(test_resolve_folder_from_queue())
      #asyncio.run(test_download_process_via_odata())
-     asyncio.run(test_upload_package_odata())
+     #asyncio.run(test_upload_package_odata())
+     #asyncio.run(test_get_process_dependencies_api())
+     #asyncio.run(debug_nuspec())
+     asyncio.run(test_get_dependencies_from_file())
 
 
   
