@@ -9,6 +9,7 @@ import asyncio
 from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 import json
 from service import OrchestratorClient, QueueItemStatus,ResourceTypes,LinkableResourceTypes
+from pathlib import Path
 
 
 
@@ -190,6 +191,8 @@ async def test_download_library_version():
             await client.close()
 
     return True
+
+
 
 async def test_get_resources():
     print("\n" + "=" * 60)
@@ -995,6 +998,96 @@ async def test_resolve_folder_from_queue():
     finally:
         await client.close()
 
+async def test_download_process_via_odata():
+    print("\n" + "=" * 60)
+    print("TEST: Download Process via OData DownloadPackage")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    key = f"{account}/{tenant}"
+
+    client = OrchestratorClient(account, tenant)
+
+    # ---- Your Process ----
+    process_name = "UHCPendingClaims_Dispatcher"
+    version = "1.0.16"
+    folder_id = 278023
+
+    try:
+        await client.authenticate()
+
+        print(f"Downloading {process_name} v{version}")
+        print(f"FolderId: {folder_id}")
+
+        path = await client.download_package_odata(
+            package_name=process_name,
+            version=version,
+            folder_id=folder_id,
+        )
+
+        assert path.exists()
+        assert path.stat().st_size > 0
+
+        print(f"✓ {key}: Downloaded {path.name}")
+        print(f"   Size: {path.stat().st_size} bytes")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ {key}: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+async def test_upload_package_odata():
+    print("\n" + "=" * 60)
+    print("TEST: Upload Package via OData")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+    folder_id = 733555
+    client = OrchestratorClient(account, tenant)
+
+    package_path = Path(client.download_dir) / "UHCPendingClaims_Dispatcher.1.0.15.nupkg"
+   
+
+    try:
+        await client.authenticate()
+
+        if not package_path.exists():
+            print(f"✗ Package not found at {package_path}")
+            print("  Run test_download_package_odata() first")
+            return False
+
+        print(f"Uploading: {package_path.name} ({package_path.stat().st_size} bytes)")
+        print(f"FolderId:  {folder_id}")
+
+        result = await client.upload_package_odata(package_path, folder_id)
+        print(result)
+        if result.get("status") == "already_exists":
+            print(f"⚠ Package already exists in Orchestrator — skipped")
+        else:
+            print(f"✓ Upload successful")
+            if result:
+                print(f"  Response: {result}")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ {e}")
+        return False
+
+    finally:
+        await client.close()
+
 
 
 # -----------------------------------------------------------------------------
@@ -1011,13 +1104,15 @@ if __name__ == "__main__":
      #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     #asyncio.run(test_get_resources())
-     #asyncio.run(test_ensure_folder_path())
-     #asyncio.run(test_ensure_resources_local())
-     #asyncio.run(test_link_resources_to_first_valid_folder())
-     #asyncio.run(test_download_storage_file())
+     asyncio.run(test_get_resources())
+     asyncio.run(test_ensure_folder_path())
+     asyncio.run(test_ensure_resources_local())
+     asyncio.run(test_link_resources_to_first_valid_folder())
+     asyncio.run(test_download_storage_file())
      asyncio.run(test_get_queue_items())
      #asyncio.run(test_resolve_folder_from_queue())
+     #asyncio.run(test_download_process_via_odata())
+     asyncio.run(test_upload_package_odata())
+
 
   
-

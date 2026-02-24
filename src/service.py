@@ -1,4 +1,4 @@
-import os
+
 import json
 import httpx
 from pathlib import Path
@@ -220,15 +220,19 @@ class OrchestratorClient:
     # Headers
     # -------------------------------------------------------------------------
 
-    def _headers(self, folder_id: int | None = None) -> dict:
+    def _headers(self, folder_id: int | None = None, multipart: bool = False) -> dict:
         if not self._access_token:
             raise RuntimeError("Client not authenticated")
 
         headers = {
             "Authorization": f"Bearer {self._access_token}",
-            "Content-Type": "application/json",
             "X-UIPATH-TenantName": self.tenant,
         }
+
+        # Multipart uploads must NOT have Content-Type set —
+        # httpx sets it automatically with the correct boundary
+        if not multipart:
+            headers["Content-Type"] = "application/json"
 
         if folder_id is not None:
             headers["X-UIPATH-OrganizationUnitId"] = str(folder_id)
@@ -345,8 +349,6 @@ class OrchestratorClient:
                 if q["Id"] == queue_id:
                     return folder_id
     
-
-
     def _to_uipath_datetime(self, dt: datetime) -> str:
         """
         Convert datetime to UiPath OData v4 accepted format:
@@ -361,7 +363,6 @@ class OrchestratorClient:
         dt = dt.replace(microsecond=0)
 
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
     async def get_queue_items(
         self,
@@ -469,6 +470,7 @@ class OrchestratorClient:
             "limit": max_internal,
             "items": collected,
         }
+    
     async def get_triggers(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
 
@@ -553,6 +555,8 @@ class OrchestratorClient:
         
         data = await self.get(endpoint, folder_id=folder_id)
         return self._unwrap_odata(data)
+
+
 
     @property
     def _resource_getters(self) -> dict[ResourceTypes, callable]:
@@ -1111,9 +1115,103 @@ class OrchestratorClient:
         return path
 
 
+    
+    async def download_package_odata(
+        self,
+        package_name: str,
+        version: str,
+        folder_id: int,
+    ) -> Path:
+        if not package_name or not version:
+            raise ValueError("package_name and version are required")
+
+        if not self._access_token:
+            await self.authenticate()
+
+        # Step 1: Confirm release exists
+        releases = self._unwrap_odata(
+            await self.get("odata/Releases", folder_id=folder_id)
+        )
+
+        release = next(
+            (r for r in releases
+            if r.get("ProcessKey") == package_name
+            and r.get("ProcessVersion") == version),
+            None,
+        )
+
+        if not release:
+            available = [(r.get("ProcessKey"), r.get("ProcessVersion")) for r in releases]
+            raise RuntimeError(
+                f"Release not found: {package_name} v{version} in folder {folder_id}. "
+                f"Available: {available}"
+            )
+
+        # Step 2: Download
+        url = (
+            f"{self.base_url}{self.account}/{self.tenant}/orchestrator_"
+            f"/odata/Processes"
+            f"/UiPath.Server.Configuration.OData.DownloadPackage"
+            f"(key='{package_name}:{version}')"
+        )
+
+        r = await self.client.get(url, headers=self._headers(folder_id))
+        r.raise_for_status()
+
+        # Step 3: Save to disk
+        base_path = Path(self.download_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+        path = base_path / f"{package_name}.{version}.nupkg"
+        path.write_bytes(r.content)
+
+        return path
+    
+    async def upload_package_odata(
+        self,
+        package_path: Path | str,
+        folder_id: int,
+        overwrite: bool = False,
+    ) -> dict:
+        if not self._access_token:
+            await self.authenticate()
+
+        package_path = Path(package_path)
+
+        if not package_path.exists():
+            raise FileNotFoundError(f"Package not found: {package_path}")
+        if package_path.suffix != ".nupkg":
+            raise ValueError(f"File must be a .nupkg: {package_path}")
+
+        url = (
+            f"{self.base_url}{self.account}/{self.tenant}/orchestrator_"
+            f"/odata/Processes/UiPath.Server.Configuration.OData.UploadPackage"
+        )
+
+        with open(package_path, "rb") as f:
+            r = await self.client.post(
+                url,
+                headers=self._headers(folder_id, multipart=True),
+                files={"file": (package_path.name, f, "application/octet-stream")},
+            )
+
+        if r.status_code == 409:
+            if overwrite:
+                raise RuntimeError(
+                    f"Cannot overwrite {package_path.name} — "
+                    "UiPath does not allow overwriting existing package versions."
+                )
+            return {"status": "already_exists", "package": package_path.name}
+
+        r.raise_for_status()
+
+        if r.status_code == 204 or not r.text.strip():
+            return {"status": "uploaded", "package": package_path.name}
+
+        return r.json()
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
+
 
     async def close(self):
         await self.client.aclose()
