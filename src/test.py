@@ -6,9 +6,9 @@ Uncomment the test you want to run at the bottom
 """
 import json
 import asyncio
-from service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants)
 import json
-from service import OrchestratorClient, QueueItemStatus,ResourceTypes,LinkableResourceTypes
+from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,PackageDeploymentService,CONFIG,get_available_accounts,get_available_tenants
+from pathlib import Path
 
 
 
@@ -190,6 +190,8 @@ async def test_download_library_version():
             await client.close()
 
     return True
+
+
 
 async def test_get_resources():
     print("\n" + "=" * 60)
@@ -995,6 +997,156 @@ async def test_resolve_folder_from_queue():
     finally:
         await client.close()
 
+async def test_download_process_via_odata():
+    print("\n" + "=" * 60)
+    print("TEST: Download Process via OData DownloadPackage")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    key = f"{account}/{tenant}"
+
+    client = OrchestratorClient(account, tenant)
+
+    # ---- Your Process ----
+    process_name = "UHCPendingClaims_Dispatcher"
+    version = "1.0.16"
+    folder_id = 278023
+
+    try:
+        await client.authenticate()
+
+        print(f"Downloading {process_name} v{version}")
+        print(f"FolderId: {folder_id}")
+
+        path = await client.download_package_odata(
+            package_name=process_name,
+            version=version,
+            folder_id=folder_id,
+        )
+
+        assert path.exists()
+        assert path.stat().st_size > 0
+
+        print(f"✓ {key}: Downloaded {path.name}")
+        print(f"   Size: {path.stat().st_size} bytes")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ {key}: {e}")
+        return False
+
+    finally:
+        await client.close()
+
+async def test_upload_package_odata():
+    print("\n" + "=" * 60)
+    print("TEST: Upload Package via OData")
+    print("=" * 60)
+
+    account = "billiysusldx"
+    tenant = "DefaultTenant"
+    folder_id = 733555
+    client = OrchestratorClient(account, tenant)
+
+    package_path = Path(client.download_dir) / "1password_API_Library.1.0.1.nupkg"
+   
+
+    try:
+        await client.authenticate()
+
+        if not package_path.exists():
+            print(f"✗ Package not found at {package_path}")
+            print("  Run test_download_package_odata() first")
+            return False
+
+        print(f"Uploading: {package_path.name} ({package_path.stat().st_size} bytes)")
+        print(f"FolderId:  {folder_id}")
+
+        result = await client.upload_package_odata(package_path, folder_id,"Libraries")
+        print(result)
+        if result.get("status") == "already_exists":
+            print(f"⚠ Package already exists in Orchestrator — skipped")
+        else:
+            print(f"✓ Upload successful")
+            if result:
+                print(f"  Response: {result}")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ {e}")
+        return False
+
+    finally:
+        await client.close()
+
+async def test_deploy_package_cross_tenant():
+    print("\n" + "=" * 60)
+    print("TEST: Cross-Tenant Deployment (DEV → DefaultTenant)")
+    print("=" * 60)
+
+    dev_account = "billiysusldx"
+    dev_tenant = "DEV"
+
+    target_account = "billiysusldx"
+    target_tenant = "DefaultTenant"
+
+    process_name = "ProcessUploadTest"
+    version = "1.0.2"
+
+    dev_folder_id = 278023
+    target_folder_id = 735290
+
+    dev_client = OrchestratorClient(account=dev_account, tenant=dev_tenant)
+    target_client = OrchestratorClient(account=target_account, tenant=target_tenant)
+
+    try:
+        # ---------------------------------------------------------
+        # Authenticate both clients
+        # ---------------------------------------------------------
+        await dev_client.authenticate()
+        await target_client.authenticate()
+
+        print(f"Deploying {process_name} v{version}")
+        print(f"Source: {dev_account}/{dev_tenant}")
+        print(f"Target: {target_account}/{target_tenant}")
+
+        # ---------------------------------------------------------
+        # Create Deployment Service
+        # ---------------------------------------------------------
+        deployment_service = PackageDeploymentService(source=dev_client, target=target_client, dry_run=False)
+
+        # ---------------------------------------------------------
+        # Execute Deployment
+        # ---------------------------------------------------------
+        result = await deployment_service.deploy(package_name=process_name, version=version, source_folder_id=dev_folder_id, target_folder_id=target_folder_id)
+
+        assert result["status"] == "success"
+        assert result["package"] == process_name
+        assert result["version"] == version
+
+        print("✓ Deployment successful")
+        print("Dependencies uploaded:", result["dependencies_uploaded"])
+        print("Dependencies skipped:", result["dependencies_skipped"])
+        print("Cycles detected:", result["cycles_detected"])
+        print("Upload result:", result["upload_result"])
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Test failed: {e}")
+        return False
+
+    finally:
+        await dev_client.close()
+        await target_client.close()
 
 
 # -----------------------------------------------------------------------------
@@ -1016,8 +1168,12 @@ if __name__ == "__main__":
      #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
      #asyncio.run(test_download_storage_file())
-     asyncio.run(test_get_queue_items())
+     #asyncio.run(test_get_queue_items())
      #asyncio.run(test_resolve_folder_from_queue())
+     #asyncio.run(test_download_process_via_odata())
+     #asyncio.run(test_upload_package_odata())
+     asyncio.run(test_deploy_package_cross_tenant())
+     
+
 
   
-

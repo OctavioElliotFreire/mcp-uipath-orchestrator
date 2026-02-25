@@ -9,7 +9,7 @@
 
 import json
 from mcp.server.fastmcp import FastMCP
-from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,ResourceTypes,LinkableResourceTypes)
+from src.service import (OrchestratorClient,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,ResourceTypes,LinkableResourceTypes,PackageDeploymentService)
 from typing import  Dict,Optional,Any,List
 from dateutil import parser as dateutil_parser
 
@@ -249,8 +249,6 @@ async def ensure_folder_path(account: str, tenant: str, folder_path: str) -> str
             "message": str(e)
         }, indent=2)
 
-
-
 @mcp.tool()
 async def ensure_resource_in_folder(resource_type:str,folder_path: str,resource_spec: Dict[str, Any],account: str,tenant: str) -> str:
     """
@@ -403,11 +401,53 @@ async def get_queue_items(account: str,tenant: str,skip: int,queue_id: int,start
             "status": "error",
             "message": str(e)
         }, indent=2)
-# -----------------------------------------------------------------------------
-# ACTION-SCOPED OPERATIONAL TOOLS
-# -----------------------------------------------------------------------------
 
+@mcp.tool()
+async def deploy_package_between_tenants(source_account: str, source_tenant: str, target_account: str, target_tenant: str, package_name: str, version: str, source_folder_id: int, target_folder_id: int, dry_run: bool = False) -> str:
+    """
+    Deploy a process package from one tenant to another.
 
+    This tool:
+    - Downloads the process from the source tenant
+    - Resolves and uploads missing internal dependencies
+    - Skips official UiPath dependencies
+    - Uploads the main process to the target tenant
+    - Returns a structured deployment summary
+
+    Parameters:
+        source_account: Source Orchestrator account
+        source_tenant: Source tenant name
+        target_account: Target Orchestrator account
+        target_tenant: Target tenant name
+        package_name: Process package name
+        version: Process version
+        source_folder_id: Folder ID where process exists in source
+        target_folder_id: Folder ID where process should be uploaded in target
+        dry_run: If True, simulates deployment without uploading
+
+    Returns:
+        JSON string with deployment summary
+    """
+
+    try:
+        source_client = await get_client(source_account, source_tenant)
+        target_client = await get_client(target_account, target_tenant)
+
+        deployment_service = PackageDeploymentService(source=source_client, target=target_client, dry_run=dry_run)
+
+        result = await deployment_service.deploy(package_name=package_name, version=version, source_folder_id=source_folder_id, target_folder_id=target_folder_id)
+
+        return json.dumps({
+            "status": "ok",
+            "deployment": result
+        }, indent=2)
+
+    except Exception as e:
+        
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
 
 # -----------------------------------------------------------------------------
 # Entry point
