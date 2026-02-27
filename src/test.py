@@ -1045,51 +1045,9 @@ async def test_download_process_via_odata():
     finally:
         await client.close()
 
-async def test_upload_package_odata():
+async def test_download_and_upload_cross_tenant():
     print("\n" + "=" * 60)
-    print("TEST: Upload Package via OData")
-    print("=" * 60)
-
-    account = "billiysusldx"
-    tenant = "DefaultTenant"
-    folder_id = 733555
-    client = OrchestratorClient(account, tenant)
-
-    package_path = Path(client.download_dir) / "1password_API_Library.1.0.1.nupkg"
-   
-
-    try:
-        await client.authenticate()
-
-        if not package_path.exists():
-            print(f"✗ Package not found at {package_path}")
-            print("  Run test_download_package_odata() first")
-            return False
-
-        print(f"Uploading: {package_path.name} ({package_path.stat().st_size} bytes)")
-        print(f"FolderId:  {folder_id}")
-
-        result = await client.upload_package_odata(package_path, folder_id,"Libraries")
-        print(result)
-        if result.get("status") == "already_exists":
-            print(f"⚠ Package already exists in Orchestrator — skipped")
-        else:
-            print(f"✓ Upload successful")
-            if result:
-                print(f"  Response: {result}")
-
-        return True
-
-    except Exception as e:
-        print(f"✗ {e}")
-        return False
-
-    finally:
-        await client.close()
-
-async def test_deploy_package_cross_tenant():
-    print("\n" + "=" * 60)
-    print("TEST: Cross-Tenant Deployment (DEV → DefaultTenant)")
+    print("TEST: download_package_with_dependencies + upload_single_package")
     print("=" * 60)
 
     dev_account = "billiysusldx"
@@ -1109,39 +1067,61 @@ async def test_deploy_package_cross_tenant():
 
     try:
         # ---------------------------------------------------------
-        # Authenticate both clients
+        # Authenticate
         # ---------------------------------------------------------
         await dev_client.authenticate()
         await target_client.authenticate()
 
-        print(f"Deploying {process_name} v{version}")
         print(f"Source: {dev_account}/{dev_tenant}")
         print(f"Target: {target_account}/{target_tenant}")
+        print(f"Process: {process_name} v{version}")
 
         # ---------------------------------------------------------
-        # Create Deployment Service
+        # STEP 1: Download packages
         # ---------------------------------------------------------
-        deployment_service = PackageDeploymentService(source=dev_client, target=target_client, dry_run=False)
+        manifest = await dev_client.download_package_with_dependencies(
+            package_name=process_name,
+            version=version,
+            source_folder_id=dev_folder_id
+        )
+
+        assert "packages" in manifest
+        assert len(manifest["packages"]) > 0
+
+        print("\nDownloaded packages:")
+        for pkg in manifest["packages"]:
+            print("  -", pkg)
 
         # ---------------------------------------------------------
-        # Execute Deployment
+        # STEP 2: Upload each package
         # ---------------------------------------------------------
-        result = await deployment_service.deploy(package_name=process_name, version=version, source_folder_id=dev_folder_id, target_folder_id=target_folder_id)
+        print("\nUploading packages to target tenant:")
 
-        assert result["status"] == "success"
-        assert result["package"] == process_name
-        assert result["version"] == version
+        upload_results = []
 
-        print("✓ Deployment successful")
-        print("Dependencies uploaded:", result["dependencies_uploaded"])
-        print("Dependencies skipped:", result["dependencies_skipped"])
-        print("Cycles detected:", result["cycles_detected"])
-        print("Upload result:", result["upload_result"])
+        for pkg in manifest["packages"]:
+            result = await target_client.upload_single_package(
+                local_path=pkg,
+                folder_id=target_folder_id
+            )
+
+            upload_results.append(result)
+
+            print(f"  → {pkg.split('\\')[-1]} : {result['status']}")
+
+        # ---------------------------------------------------------
+        # Assertions
+        # ---------------------------------------------------------
+        for result in upload_results:
+            assert result["status"] in ("uploaded", "already_exists")
+
+        print("\n✓ Upload phase completed successfully")
+        print("Cycles detected:", manifest["cycles_detected"])
 
         return True
 
     except Exception as e:
-        print(f"✗ Test failed: {e}")
+        print(f"\n✗ Test failed: {e}")
         return False
 
     finally:
@@ -1170,9 +1150,7 @@ if __name__ == "__main__":
      #asyncio.run(test_download_storage_file())
      #asyncio.run(test_get_queue_items())
      #asyncio.run(test_resolve_folder_from_queue())
-     #asyncio.run(test_download_process_via_odata())
-     #asyncio.run(test_upload_package_odata())
-     asyncio.run(test_deploy_package_cross_tenant())
+     asyncio.run(test_download_and_upload_cross_tenant())
      
 
 

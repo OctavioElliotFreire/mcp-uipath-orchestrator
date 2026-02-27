@@ -41,7 +41,7 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 # MCP Server
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("uipath-orchestrator")
+mcp = FastMCP("uipath-orchestrator2")
 
 # -----------------------------------------------------------------------------
 # DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
@@ -403,52 +403,110 @@ async def get_queue_items(account: str,tenant: str,skip: int,queue_id: int,start
         }, indent=2)
 
 @mcp.tool()
-async def deploy_package_between_tenants(source_account: str, source_tenant: str, target_account: str, target_tenant: str, package_name: str, version: str, source_folder_id: int, target_folder_id: int, dry_run: bool = False) -> str:
+async def upload_package(account: str,tenant: str,folder_id: int,local_path: str, overwrite: bool = False) -> str:
     """
-    Deploy a process package from one tenant to another.
+    Upload a single .nupkg file to a UiPath Orchestrator folder.
 
     This tool:
-    - Downloads the process from the source tenant
-    - Resolves and uploads missing internal dependencies
-    - Skips official UiPath dependencies
-    - Uploads the main process to the target tenant
-    - Returns a structured deployment summary
+    - Determines package type automatically (library or process)
+    - Attempts upload
+    - Relies on Orchestrator 409 for idempotency
+    - Is atomic (one file per call)
 
     Parameters:
-        source_account: Source Orchestrator account
-        source_tenant: Source tenant name
-        target_account: Target Orchestrator account
-        target_tenant: Target tenant name
-        package_name: Process package name
-        version: Process version
-        source_folder_id: Folder ID where process exists in source
-        target_folder_id: Folder ID where process should be uploaded in target
-        dry_run: If True, simulates deployment without uploading
+        account: Orchestrator account name
+        tenant: Orchestrator tenant name
+        folder_id: Target folder ID
+        local_path: Local path to .nupkg file
+        overwrite: Optional (default False)
 
     Returns:
-        JSON string with deployment summary
+        JSON:
+        {
+            "status": "uploaded" | "already_exists" | "error",
+            "package": "...",
+            "message": "..." (optional)
+        }
     """
 
     try:
-        source_client = await get_client(source_account, source_tenant)
-        target_client = await get_client(target_account, target_tenant)
+        client = await get_client(account, tenant)
 
-        deployment_service = PackageDeploymentService(source=source_client, target=target_client, dry_run=dry_run)
+        result = await client.upload_single_package(
+            local_path=local_path,
+            folder_id=folder_id,
+            overwrite=overwrite
+        )
 
-        result = await deployment_service.deploy(package_name=package_name, version=version, source_folder_id=source_folder_id, target_folder_id=target_folder_id)
-
-        return json.dumps({
-            "status": "ok",
-            "deployment": result
-        }, indent=2)
+        return json.dumps(result, indent=2)
 
     except Exception as e:
-        
         return json.dumps({
             "status": "error",
             "message": str(e)
         }, indent=2)
 
+
+@mcp.tool()
+async def download_package_with_dependencies(
+    account: str,
+    tenant: str,
+    package_name: str,
+    version: str,
+    folder_id: int
+) -> str:
+    """
+    Download a process package and all its internal dependencies.
+
+    This tool:
+    - Downloads the process (.nupkg)
+    - Recursively downloads internal library dependencies
+    - Skips official UiPath dependencies
+    - Detects dependency cycles
+    - Returns local file paths
+
+    Parameters:
+        account: Orchestrator account name
+        tenant: Orchestrator tenant name
+        package_name: Process package name
+        version: Process version
+        folder_id: Folder ID where the process exists
+
+    Returns:
+        JSON:
+        {
+            "status": "ok",
+            "packages": [...],
+            "cycles_detected": [...]
+        }
+
+    On error:
+        {
+            "status": "error",
+            "message": "..."
+        }
+    """
+
+    try:
+        client = await get_client(account, tenant)
+
+        result = await client.download_package_with_dependencies(
+            package_name=package_name,
+            version=version,
+            source_folder_id=folder_id
+        )
+
+        return json.dumps({
+            "status": "ok",
+            "packages": result.get("packages", []),
+            "cycles_detected": result.get("cycles_detected", [])
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": str(e)
+        }, indent=2)
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
