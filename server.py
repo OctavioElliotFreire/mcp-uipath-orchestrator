@@ -41,7 +41,7 @@ async def get_client(account: str, tenant: str) -> OrchestratorClient:
 # MCP Server
 # -----------------------------------------------------------------------------
 
-mcp = FastMCP("uipath-orchestrator2")
+mcp = FastMCP("uipath-orchestrator")
 
 # -----------------------------------------------------------------------------
 # DISCOVERY TOOLS (READ-ONLY, AUTHORITATIVE)
@@ -448,13 +448,7 @@ async def upload_package(account: str,tenant: str,folder_id: int,local_path: str
 
 
 @mcp.tool()
-async def download_package_with_dependencies(
-    account: str,
-    tenant: str,
-    package_name: str,
-    version: str,
-    folder_id: int
-) -> str:
+async def download_package_with_dependencies(account: str,tenant: str,package_name: str,version: str,folder_id: int) -> str:
     """
     Download a process package and all its internal dependencies.
 
@@ -507,6 +501,42 @@ async def download_package_with_dependencies(
             "status": "error",
             "message": str(e)
         }, indent=2)
+
+@mcp.tool()
+async def ensure_release(account: str, tenant: str, folder_id: int, process_key: str, version: str, release_name: str | None = None, entry_point: str |None = None) -> dict:
+    """
+    Idempotently ensure a UiPath release exists in a folder.
+
+    Args:
+        account: UiPath Cloud account name.
+        tenant: Target tenant name.
+        folder_id: ID of the folder where the release should exist.
+        process_key: Package ID (process name) to create the release from.
+        version: Package version to associate with the release.
+        release_name: Optional custom release name (defaults to <process_key>_<version>).
+        entry_point: Optional workflow entry point (e.g., "Main.xaml"). if null, the Main.xaml will be used.
+
+    Returns:
+        A dict containing the release details and creation status.
+    """
+
+    client = OrchestratorClient(account=account, tenant=tenant)
+
+    try:
+        await client.authenticate()
+
+        return await client.ensure_release(
+            folder_id=folder_id,
+            process_key=process_key,
+            version=version,
+            release_name=release_name,
+            entry_point=entry_point,
+        )
+
+    finally:
+        await client.close()
+
+
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------

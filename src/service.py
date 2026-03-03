@@ -8,7 +8,6 @@ import uuid
 from enum import Enum
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from packaging.version import Version
 import logging
 import zipfile
 import xml.etree.ElementTree as ET
@@ -61,6 +60,7 @@ class ResourceTypes(str, Enum):
     processes = "processes"
     triggers = "triggers"
     storage_buckets = "storage_buckets"
+    business_rules = "business_rules"  
 
     @property
     def is_linkable(self) -> bool:
@@ -76,6 +76,7 @@ class LinkableResourceTypes(str, Enum):
     assets = "assets"
     queues = "queues"
     storage_buckets = "storage_buckets"
+    business_rules = "business_rules"
 
     @property
     def config(self) -> ResourceConfig:
@@ -98,7 +99,14 @@ class LinkableResourceTypes(str, Enum):
                 id_field="BucketIds",
                 payload_builder="_build_storage_bucket_payload",
             ),
-        }
+                LinkableResourceTypes.business_rules: ResourceConfig(
+                create_endpoint="odata/BusinessRules",
+                share_endpoint="odata/BusinessRules/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="BusinessRuleIds",
+                payload_builder="_build_business_rule_payload",
+    ),
+}
+        
         return configs[self]
 
     def to_resource_type(self) -> ResourceTypes:
@@ -176,11 +184,6 @@ class OrchestratorClient:
     - Normalizes OData responses
     - Returns clean domain objects
     """
-
-
-        # ----------------------------------------
-    
-    
 
 
     def __init__(self, account: str, tenant: str):  
@@ -370,6 +373,9 @@ class OrchestratorClient:
                 if q["Id"] == queue_id:
                     return folder_id
     
+    async def get_business_rules(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/BusinessRules", folder_id))
+
     def _to_uipath_datetime(self, dt: datetime) -> str:
         """
         Convert datetime to UiPath OData v4 accepted format:
@@ -587,6 +593,7 @@ class OrchestratorClient:
             ResourceTypes.processes: self.get_processes,
             ResourceTypes.triggers: self.get_triggers,
             ResourceTypes.storage_buckets: self.get_storage_buckets,
+            ResourceTypes.business_rules: self.get_business_rules,
             
         }
 
@@ -1271,6 +1278,86 @@ class OrchestratorClient:
             "package": local_path.name
         }
 
+    async def create_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: str = "Main.xaml") -> dict:
+        """
+        Create a Release (Process) in a specific folder.
+        Equivalent to POST odata/Releases
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        payload = {
+            "Name": release_name or f"{process_key}_{version}",
+            "ProcessKey": process_key,
+            "ProcessVersion": version,
+            "EntryPointPath": entry_point,
+        }
+
+        return await self.post("odata/Releases", payload, folder_id=folder_id)
+
+    async def ensure_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: Optional[str] =None) -> dict:
+        """
+        Idempotent release creation.
+
+        - If release exists → returns it
+        - If not → creates it
+        - Always returns consistent response structure
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        release_name = release_name or f"{process_key}_{version}"
+
+        # Check existence by Name (unique per folder)
+        endpoint = f"odata/Releases?$filter=Name eq '{release_name}'"
+        
+        entry_point = entry_point or "Main.xaml"
+        
+        existing = self._unwrap_odata(
+            await self.get(endpoint, folder_id=folder_id)
+        )
+
+        if existing:
+            return {
+                "status": "already_exists",
+                "release": existing[0],
+            }
+
+        try:
+            created = await self.create_release(
+                folder_id=folder_id,
+                process_key=process_key,
+                version=version,
+                release_name=release_name,
+                entry_point=entry_point,
+            )
+
+            return {
+                "status": "created",
+                "release": created,
+            }
+
+        except httpx.HTTPStatusError as e:
+            # Race-condition safe: if another call created it simultaneously
+            if e.response.status_code == 409:
+                existing = self._unwrap_odata(
+                    await self.get(endpoint, folder_id=folder_id)
+                )
+                if existing:
+                    return {
+                        "status": "already_exists",
+                        "release": existing[0],
+                    }
+            raise
+
     @staticmethod
     def parse_nupkg_metadata(nupkg_path: Path | str) -> dict:
         """
@@ -1361,7 +1448,6 @@ class OrchestratorClient:
             "dependencies": dependencies,
         }
 
-   
     async def download_package_with_dependencies(
         self,        # OrchestratorClient (source)
         package_name: str,

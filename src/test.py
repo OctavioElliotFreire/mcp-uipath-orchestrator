@@ -7,8 +7,8 @@ Uncomment the test you want to run at the bottom
 import json
 import asyncio
 import json
-from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,PackageDeploymentService,CONFIG,get_available_accounts,get_available_tenants
-from pathlib import Path
+from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFIG,get_available_accounts,get_available_tenants
+
 
 
 
@@ -191,8 +191,6 @@ async def test_download_library_version():
 
     return True
 
-
-
 async def test_get_resources():
     print("\n" + "=" * 60)
     print("TEST: get_resources() — FULL OUTPUT")
@@ -230,6 +228,7 @@ async def test_get_resources():
                     ResourceTypes.processes,
                     ResourceTypes.triggers,
                     ResourceTypes.storage_buckets,
+                    ResourceTypes.business_rules,
     ],
                 folder_id=folder["Id"],
             )
@@ -259,7 +258,6 @@ async def test_get_resources():
 
     finally:
         await client.close()
-
 
 async def test_get_queue_items():
     print("\n" + "=" * 60)
@@ -360,6 +358,7 @@ async def test_get_queue_items():
 
     finally:
         await client.close()
+
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
     print("TEST: Ensure + Resolve Folder Path")
@@ -1128,7 +1127,66 @@ async def test_download_and_upload_cross_tenant():
         await dev_client.close()
         await target_client.close()
 
+async def test_create_release_in_folder():
+    print("\n" + "=" * 60)
+    print("TEST: create_release in target folder")
+    print("=" * 60)
 
+    account = "billiysusldx"
+    tenant = "DEV"
+
+    process_name = "OscarAppealsCO164_Performer"
+    version = "1.0.1-alpha"
+
+    target_folder_id = 278000
+
+    client = OrchestratorClient(account=account, tenant=tenant)
+
+    try:
+        # ---------------------------------------------------------
+        # Authenticate
+        # ---------------------------------------------------------
+        await client.authenticate()
+
+        print(f"Tenant: {account}/{tenant}")
+        print(f"Process: {process_name} v{version}")
+        print(f"Folder ID: {target_folder_id}")
+
+        # ---------------------------------------------------------
+        # STEP 1: Create Release
+        # ---------------------------------------------------------
+        result = await client.ensure_release(
+            folder_id=target_folder_id,
+            process_key=process_name,
+            version=version,
+        )
+
+        print("\nCreate release response:")
+        print(result)
+
+        # ---------------------------------------------------------
+        # STEP 2: Validate Release Exists
+        # ---------------------------------------------------------
+        releases = await client.get_processes(target_folder_id)
+
+        matching = [
+            r for r in releases
+            if r.get("ProcessKey") == process_name
+            and r.get("ProcessVersion") == version
+        ]
+
+        assert len(matching) > 0
+
+        print("\n✓ Release successfully created or already exists")
+
+        return True
+
+    except Exception as e:
+        print(f"\n✗ Test failed: {e}")
+        return False
+
+    finally:
+        await client.close()
 # -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
@@ -1150,7 +1208,8 @@ if __name__ == "__main__":
      #asyncio.run(test_download_storage_file())
      #asyncio.run(test_get_queue_items())
      #asyncio.run(test_resolve_folder_from_queue())
-     asyncio.run(test_download_and_upload_cross_tenant())
+     #asyncio.run(test_download_and_upload_cross_tenant())
+     asyncio.run(test_create_release_in_folder())
      
 
 
