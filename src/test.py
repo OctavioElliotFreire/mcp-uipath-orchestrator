@@ -8,7 +8,7 @@ import json
 import asyncio
 import json
 from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFIG,get_available_accounts,get_available_tenants
-
+import logging
 
 
 
@@ -16,40 +16,14 @@ from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFI
 # Helpers
 # -----------------------------------------------------------------------------
 
+logging.basicConfig(level=logging.INFO)
+
 def get_all_account_tenant_pairs() -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for account in get_available_accounts(CONFIG):
         for tenant in get_available_tenants(CONFIG, account):
             pairs.append((account, tenant))
     return pairs
-
-async def test_connection():
-    print("\n" + "=" * 60)
-    print("TEST 1: Connection and Authentication")
-    print("=" * 60)
-
-    pairs = get_all_account_tenant_pairs()
-    if not pairs:
-        print("✗ FAIL: No accounts/tenants configured")
-        return False
-
-    account, tenant = pairs[0]
-    client = OrchestratorClient(account, tenant)
-
-    try:
-        token1 = await client.authenticate()
-        token2 = await client.authenticate()
-
-        assert token1 == token2
-        print("✓ PASS: Token reused")
-        return True
-
-    except Exception as e:
-        print(f"✗ FAIL: {e}")
-        return False
-
-    finally:
-        await client.close()
 
 async def test_get_folders_tree_multi_tenant():
     print("\n" + "=" * 60)
@@ -82,36 +56,6 @@ async def test_get_folders_tree_multi_tenant():
 
             if tree:
                 print_tree(tree)
-
-        except Exception as e:
-            print(f"✗ {key}: {e}")
-            return False
-
-        finally:
-            await client.close()
-
-    return True
-
-async def test_folder_collections(method_name: str, label: str):
-    print("\n" + "=" * 60)
-    print(f"TEST: {label}")
-    print("=" * 60)
-
-    for account, tenant in get_all_account_tenant_pairs():
-        key = f"{account}/{tenant}"
-        client = OrchestratorClient(account, tenant)
-
-        try:
-            await client.authenticate()
-            folders = await client.get_folders()
-
-            for folder in folders[:3]:
-                method = getattr(client, method_name)
-                items = await method(folder["Id"])
-                print(
-                    f"✓ {key} | {folder['DisplayName']}: "
-                    f"{len(items)} {label.lower()}"
-                )
 
         except Exception as e:
             print(f"✗ {key}: {e}")
@@ -228,7 +172,7 @@ async def test_get_resources():
                     ResourceTypes.processes,
                     ResourceTypes.triggers,
                     ResourceTypes.storage_buckets,
-                    ResourceTypes.business_rules,
+                    
     ],
                 folder_id=folder["Id"],
             )
@@ -1192,23 +1136,20 @@ async def test_create_release_in_folder():
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Uncomment ONE test at a time
+    # Uncomment ONE test at a timeCLD
 
-     #asyncio.run(test_connection())
+ 
      #asyncio.run(test_get_folders_tree_multi_tenant())
-     #asyncio.run(test_folder_collections("get_queues", "Queues"))
-     #asyncio.run(test_folder_collections("get_triggers", "Triggers"))
-     #asyncio.run(test_folder_collections("get_processes", "Processes"))
      #asyncio.run(test_list_library_versions_flow())
      #asyncio.run(test_download_library_version())
-     #asyncio.run(test_get_resources())
+     asyncio.run(test_get_resources())
      #asyncio.run(test_ensure_folder_path())
      #asyncio.run(test_ensure_resources_local())
      #asyncio.run(test_link_resources_to_first_valid_folder())
      #asyncio.run(test_download_storage_file())
      #asyncio.run(test_get_queue_items())
-     #asyncio.run(test_resolve_folder_from_queue())
-     #asyncio.run(test_download_and_upload_cross_tenant())
+     asyncio.run(test_resolve_folder_from_queue())
+     asyncio.run(test_download_and_upload_cross_tenant())
      asyncio.run(test_create_release_in_folder())
      
 
