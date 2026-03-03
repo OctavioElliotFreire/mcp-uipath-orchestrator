@@ -8,8 +8,12 @@ import uuid
 from enum import Enum
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from packaging.version import Version
 import logging
+import zipfile
+import xml.etree.ElementTree as ET
+import re
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,7 @@ class ResourceTypes(str, Enum):
     processes = "processes"
     triggers = "triggers"
     storage_buckets = "storage_buckets"
+    business_rules = "business_rules"  
 
     @property
     def is_linkable(self) -> bool:
@@ -71,6 +76,7 @@ class LinkableResourceTypes(str, Enum):
     assets = "assets"
     queues = "queues"
     storage_buckets = "storage_buckets"
+    business_rules = "business_rules"
 
     @property
     def config(self) -> ResourceConfig:
@@ -93,7 +99,14 @@ class LinkableResourceTypes(str, Enum):
                 id_field="BucketIds",
                 payload_builder="_build_storage_bucket_payload",
             ),
-        }
+                LinkableResourceTypes.business_rules: ResourceConfig(
+                create_endpoint="odata/BusinessRules",
+                share_endpoint="odata/BusinessRules/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="BusinessRuleIds",
+                payload_builder="_build_business_rule_payload",
+    ),
+}
+        
         return configs[self]
 
     def to_resource_type(self) -> ResourceTypes:
@@ -171,11 +184,6 @@ class OrchestratorClient:
     - Normalizes OData responses
     - Returns clean domain objects
     """
-
-
-        # ----------------------------------------
-    
-    
 
 
     def __init__(self, account: str, tenant: str):  
@@ -365,6 +373,9 @@ class OrchestratorClient:
                 if q["Id"] == queue_id:
                     return folder_id
     
+    async def get_business_rules(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/BusinessRules", folder_id))
+
     def _to_uipath_datetime(self, dt: datetime) -> str:
         """
         Convert datetime to UiPath OData v4 accepted format:
@@ -582,6 +593,7 @@ class OrchestratorClient:
             ResourceTypes.processes: self.get_processes,
             ResourceTypes.triggers: self.get_triggers,
             ResourceTypes.storage_buckets: self.get_storage_buckets,
+            ResourceTypes.business_rules: self.get_business_rules,
             
         }
 
@@ -1033,6 +1045,10 @@ class OrchestratorClient:
             {**item, "LinkedFolders": sorted(links.get(item["Id"], []))}
             for item in items
         ]
+   
+   
+   
+   
     # -------------------------------------------------------------------------
     # NuGet helpers
     # -------------------------------------------------------------------------
@@ -1209,63 +1225,158 @@ class OrchestratorClient:
 
         return r.json()
     
-  
-    async def is_version_available(self, package_id: str, required_version: str, constraint: str) -> bool:
-        """
-        Check if a compatible version of a package already exists in Orchestrator.
+    async def upload_single_package(
+        self,
+        local_path: Path | str,
+        folder_id: int,
+        overwrite: bool = False
+    ) -> dict:
 
-        Why 'constraint' is needed:
-        NuGet dependencies can define versions in different ways inside the .nuspec file.
+        local_path = Path(local_path)
 
-        Examples:
-            version="[1.2.3]"  → exact match required (only 1.2.3 is valid)
-            version="1.2.3"    → minimum version (any version >= 1.2.3 is acceptable)
-
-        During dependency resolution, we must respect these semantics:
-
-        - If constraint == "exact":
-            The required_version must exist exactly in Orchestrator.
-
-        - If constraint == "minimum":
-            Any available version greater than or equal to required_version
-            satisfies the dependency, so no upload is needed.
-
-        This prevents:
-            - Re-uploading unnecessary versions
-            - Violating NuGet compatibility rules
-            - Incorrect dependency resolution behavior
-        """
+        if not local_path.exists():
+            return {
+                "status": "error",
+                "error": f"File not found: {local_path}"
+            }
 
         try:
-            available_versions = await self.list_library_versions(package_id)
+            metadata = self.parse_nupkg_metadata(local_path)
+            pkg_type_str = metadata.get("packageType", "library")
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Failed to parse nupkg: {e}"
+            }
+
+        try:
+            pkg_type = PackageType(pkg_type_str)
         except Exception:
-            return False
+            pkg_type = PackageType.library
 
-        if constraint == "exact":
-            return required_version in available_versions
+        try:
+            result = await self.upload_package_odata(
+                package_path=local_path,
+                folder_id=folder_id,
+                package_type=pkg_type.upload_suffix,
+                overwrite=overwrite
+            )
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
-        if constraint == "minimum":
-            required = Version(required_version)
-            return any(Version(v) >= required for v in available_versions)
+        if isinstance(result, dict) and result.get("status") == "already_exists":
+            return {
+                "status": "already_exists",
+                "package": local_path.name
+            }
 
-        return False
+        return {
+            "status": "uploaded",
+            "package": local_path.name
+        }
+
+    async def create_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: str = "Main.xaml") -> dict:
+        """
+        Create a Release (Process) in a specific folder.
+        Equivalent to POST odata/Releases
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        payload = {
+            "Name": release_name or f"{process_key}_{version}",
+            "ProcessKey": process_key,
+            "ProcessVersion": version,
+            "EntryPointPath": entry_point,
+        }
+
+        return await self.post("odata/Releases", payload, folder_id=folder_id)
+
+    async def ensure_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: Optional[str] =None) -> dict:
+        """
+        Idempotent release creation.
+
+        - If release exists → returns it
+        - If not → creates it
+        - Always returns consistent response structure
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        release_name = release_name or f"{process_key}_{version}"
+
+        # Check existence by Name (unique per folder)
+        endpoint = f"odata/Releases?$filter=Name eq '{release_name}'"
+        
+        entry_point = entry_point or "Main.xaml"
+        
+        existing = self._unwrap_odata(
+            await self.get(endpoint, folder_id=folder_id)
+        )
+
+        if existing:
+            return {
+                "status": "already_exists",
+                "release": existing[0],
+            }
+
+        try:
+            created = await self.create_release(
+                folder_id=folder_id,
+                process_key=process_key,
+                version=version,
+                release_name=release_name,
+                entry_point=entry_point,
+            )
+
+            return {
+                "status": "created",
+                "release": created,
+            }
+
+        except httpx.HTTPStatusError as e:
+            # Race-condition safe: if another call created it simultaneously
+            if e.response.status_code == 409:
+                existing = self._unwrap_odata(
+                    await self.get(endpoint, folder_id=folder_id)
+                )
+                if existing:
+                    return {
+                        "status": "already_exists",
+                        "release": existing[0],
+                    }
+            raise
 
     @staticmethod
-    def get_dependencies_from_file(nupkg_path: Path | str) -> dict:
+    def parse_nupkg_metadata(nupkg_path: Path | str) -> dict:
         """
-        Extract metadata and dependencies from a local .nupkg file.
+        Parse .nuspec inside a .nupkg and return metadata and dependency info.
 
-        Package type is determined authoritatively from <packageTypes>
-        in the .nuspec file (not from tags).
-
-        No API calls needed.
+        Returns:
+        {
+            "id": "<package id>",
+            "version": "<version>",
+            "description": "...",
+            "authors": "...",
+            "tags": "...",
+            "packageType": "library"|"process"|"unknown",
+            "dependencies": [
+                {"id": "...", "version": "...", "versionConstraint": "exact"|"minimum", "targetFramework": "...", "source": "internal"|"uipath_official"},
+                ...
+            ]
+        }
         """
-
-        import zipfile
-        import xml.etree.ElementTree as ET
-        import re
-
-        
         nupkg_path = Path(nupkg_path)
 
         if not nupkg_path.exists():
@@ -1275,7 +1386,6 @@ class OrchestratorClient:
             nuspec_name = next((n for n in zf.namelist() if n.endswith(".nuspec")), None)
             if not nuspec_name:
                 raise RuntimeError(f"No .nuspec found in {nupkg_path.name}")
-
             nuspec_content = zf.read(nuspec_name).decode("utf-8")
 
         root = ET.fromstring(nuspec_content)
@@ -1292,45 +1402,26 @@ class OrchestratorClient:
 
         def extract_package_type() -> str:
             """
-            Extract authoritative package type from <tags>.
-            
+            Heuristic extraction of package type from <tags>.
+            Keeps parity with your prior logic but is a single, local function now.
             """
-
-            
             tags_lower = get_text("tags").lower()
 
-            # Explicit process indicators
             if "uipathstudioprocess" in tags_lower:
                 return "process"
-
-            # Explicit library indicators
             if "uipathstudiolibrary" in tags_lower:
                 return "library"
-
-            # Generic fallback: if it contains the word "library"
             if "library" in tags_lower:
                 return "library"
 
-            print_nuspec(nupkg_path)
+            # fallback
+            logger.debug("Unable to determine packageType from tags for %s; defaulting to unknown", nupkg_path.name)
             return "unknown"
 
-        def print_nuspec(nupkg_path: Path | str):
-            nupkg_path = Path(nupkg_path)
-
-            with zipfile.ZipFile(nupkg_path) as zf:
-                nuspec_name = next(n for n in zf.namelist() if n.endswith(".nuspec"))
-                content = zf.read(nuspec_name).decode("utf-8")
-
-            print("=" * 80)
-            print(f"NUSPEC FILE: {nuspec_name}")
-            print("=" * 80)
-            print(content)
-            print("=" * 80)
-
         tags = get_text("tags")
-
         dependencies = []
 
+        # Find dependency groups
         for group in root.findall(".//n:dependencies/n:group", ns):
             framework = group.get("targetFramework", "any")
 
@@ -1356,7 +1447,87 @@ class OrchestratorClient:
             "packageType": extract_package_type(),
             "dependencies": dependencies,
         }
-        
+
+    async def download_package_with_dependencies(
+        self,        # OrchestratorClient (source)
+        package_name: str,
+        version: str,
+        source_folder_id: int,
+    ) -> Dict:
+        """
+        Download root package and all internal dependencies.
+
+        Returns:
+            {"packages": ["/tmp/LibA.nupkg", "/tmp/MyProcess.nupkg"], "cycles_detected": [...]}
+        """
+
+        if not package_name or not version:
+            raise ValueError("package_name and version are required")
+
+        artifacts_by_key: dict[str, dict] = {}
+        ordered_keys: List[str] = []
+        cycles_detected: List[str] = []
+        visiting: Set[str] = set()
+
+        async def _download_and_recurse(pkg_id: str, pkg_version: str, is_root: bool = False):
+            key = f"{pkg_id}@{pkg_version}"
+
+            if key in visiting:
+                cycles_detected.append(key)
+                logger.warning("Cycle detected while resolving %s", key)
+                return
+
+            if key in artifacts_by_key:
+                return
+
+            visiting.add(key)
+            try:
+                # Download (root vs library)
+                if is_root:
+                    pkg_path = await self.download_package_odata(
+                        package_name=pkg_id, version=pkg_version, folder_id=source_folder_id
+                    )
+                else:
+                    pkg_path = await self.download_library_version(package_id=pkg_id, version=pkg_version)
+
+                # Parse metadata via utility
+                metadata = self.parse_nupkg_metadata(pkg_path)
+                pkg_type = metadata.get("packageType", "library")
+
+                # Recurse internal deps
+                for dep in metadata.get("dependencies", []):
+                    dep_id = dep.get("id")
+                    dep_version = dep.get("version")
+                    dep_source = dep.get("source", "internal")
+
+                    if dep_source == "uipath_official":
+                        logger.debug("Skipping official UiPath dependency %s@%s", dep_id, dep_version)
+                        continue
+
+                    if not dep_id or not dep_version:
+                        logger.warning("Skipping dependency with missing id/version in %s: %s", key, dep)
+                        continue
+
+                    await _download_and_recurse(dep_id, dep_version, is_root=False)
+
+                artifacts_by_key[key] = {
+                    "id": pkg_id,
+                    "version": pkg_version,
+                    "packageType": pkg_type,
+                    "local_path": str(pkg_path),
+                }
+                ordered_keys.append(key)
+
+            finally:
+                visiting.remove(key)
+
+        # Start recursion
+        await _download_and_recurse(package_name, version, is_root=True)
+
+        packages: List[str] = [artifacts_by_key[k]["local_path"] for k in ordered_keys]
+
+        return {"packages": packages, "cycles_detected": cycles_detected}
+  
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
@@ -1376,92 +1547,3 @@ class PackageDeploymentService:
         self.source = source
         self.target = target
         self.dry_run = dry_run
-
-    async def deploy(self, package_name: str, version: str, source_folder_id: int, target_folder_id: int) -> dict:
-
-        logger.info("Starting deployment of %s %s", package_name, version)
-
-        uploaded = []
-        skipped = []
-        cycles_detected = []
-
-        # 1️⃣ Download main package from source
-        package_path = await self.source.download_package_odata(package_name=package_name, version=version, folder_id=source_folder_id)
-
-        # 2️⃣ Resolve dependencies
-        await self._resolve_dependencies(nupkg_path=package_path, target_folder_id=target_folder_id, uploaded=uploaded, skipped=skipped, cycles_detected=cycles_detected)
-
-        # 3️⃣ Upload main package
-        metadata = self.source.get_dependencies_from_file(package_path)
-        pkg_type = PackageType(metadata["packageType"])
-
-        if not self.dry_run:
-            result = await self.target.upload_package_odata(package_path=package_path, folder_id=target_folder_id, package_type=pkg_type.upload_suffix)
-        else:
-            logger.info("Dry-run enabled — skipping main package upload")
-            result = {"status": "dry_run"}
-
-        logger.info("Deployment completed")
-
-        return {
-            "status": "success",
-            "package": package_name,
-            "version": version,
-            "dependencies_uploaded": uploaded,
-            "dependencies_skipped": skipped,
-            "cycles_detected": cycles_detected,
-            "upload_result": result,
-        }
-
-    async def _resolve_dependencies(self, nupkg_path: Path | str, target_folder_id: int, uploaded: list, skipped: list, cycles_detected: list, visited: Optional[Set[str]] = None) -> None:
-
-        if visited is None:
-            visited = set()
-
-        metadata = self.source.get_dependencies_from_file(nupkg_path)
-
-        for dep in metadata["dependencies"]:
-
-            dep_key = f"{dep['id']}@{dep['version']}"
-
-            if dep_key in visited:
-                cycles_detected.append(dep_key)
-                logger.warning("Cycle detected for %s", dep_key)
-                continue
-
-            visited.add(dep_key)
-
-            # Check if already available in target
-            is_available = await self.target.is_version_available(package_id=dep["id"], required_version=dep["version"], constraint=dep["versionConstraint"])
-
-            if is_available:
-                skipped.append(dep_key)
-                logger.info("Dependency already available: %s", dep_key)
-                continue
-
-            # Skip official UiPath packages (not stored in tenant feed)
-            if dep["source"] == "uipath_official":
-                skipped.append(dep_key)
-                logger.info("Skipping official UiPath package: %s", dep_key)
-                continue
-
-            logger.info("Processing internal dependency: %s", dep_key)
-
-            # Download internal dependency from source
-            dep_package_path = await self.source.download_library_version(package_id=dep["id"], version=dep["version"])
-
-            # Resolve nested dependencies first
-            await self._resolve_dependencies(nupkg_path=dep_package_path, target_folder_id=target_folder_id, uploaded=uploaded, skipped=skipped, cycles_detected=cycles_detected, visited=visited)
-
-            # Upload dependency to target
-            dep_metadata = self.source.get_dependencies_from_file(dep_package_path)
-            pkg_type = PackageType(dep_metadata["packageType"])
-
-            if not self.dry_run:
-                await self.target.upload_package_odata(package_path=dep_package_path, folder_id=target_folder_id, package_type=pkg_type.upload_suffix)
-
-            uploaded.append(dep_key)
-            logger.info("Uploaded dependency: %s", dep_key)
-
-
-    
