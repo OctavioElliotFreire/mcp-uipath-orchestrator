@@ -65,7 +65,10 @@ uv venv
 uv sync
 
 # Run the server
-uv run server.py
+mcp dev server.py
+
+# Connect and test tools
+'Click to connect on the MCP inspector, select tool Tools tab and click list tools'
 ```
 
 ---
