@@ -64,11 +64,14 @@ uv venv
 # Install dependencies from pyproject.toml
 uv sync
 
+# Before running, make sure to configure your credentials
+# See the 🔐 Configuration section below
+
 # Run the server
 mcp dev server.py
 
 # Connect and test tools
-'Click to connect on the MCP inspector, select tool Tools tab and click list tools'
+# Click to connect on the MCP inspector, select Tools tab and click list tools
 ```
 
 ---
@@ -178,11 +181,11 @@ To use this MCP server with Claude Desktop, add the following to your `claude_de
 }
 ```
 
-> On **Windows**, the config file is located at:
-> `%APPDATA%\Claude\claude_desktop_config.json`
+> **Tip:** You can open the config directly from Claude Desktop via **Settings** → **Developer** → **Edit Config**.
 >
-> On **macOS**, it is located at:
-> `~/Library/Application Support/Claude/claude_desktop_config.json`
+> Or navigate to the file manually:
+> - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+> - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ---
 
