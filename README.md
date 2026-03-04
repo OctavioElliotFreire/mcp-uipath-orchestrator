@@ -64,11 +64,14 @@ uv venv
 # Install dependencies from pyproject.toml
 uv sync
 
+# Before running, make sure to configure your credentials
+# See the 🔐 Configuration section below
+
 # Run the server
 mcp dev server.py
 
 # Connect and test tools
-'Click to connect on the MCP inspector, select tool Tools tab and click list tools'
+# Click to connect on the MCP inspector, select Tools tab and click list tools
 ```
 
 ---
