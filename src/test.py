@@ -16,7 +16,7 @@ import logging
 # Helpers
 # -----------------------------------------------------------------------------
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 def get_all_account_tenant_pairs() -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
@@ -1139,14 +1139,14 @@ if __name__ == "__main__":
     # Uncomment ONE test at a timeCLD
 
  
-     #asyncio.run(test_get_folders_tree_multi_tenant())
-     #asyncio.run(test_list_library_versions_flow())
-     #asyncio.run(test_download_library_version())
+     asyncio.run(test_get_folders_tree_multi_tenant())
+     asyncio.run(test_list_library_versions_flow())
+     asyncio.run(test_download_library_version())
      asyncio.run(test_get_resources())
-     #asyncio.run(test_ensure_folder_path())
-     #asyncio.run(test_ensure_resources_local())
-     #asyncio.run(test_link_resources_to_first_valid_folder())
-     #asyncio.run(test_download_storage_file())
+     asyncio.run(test_ensure_folder_path())
+     asyncio.run(test_ensure_resources_local())
+     asyncio.run(test_link_resources_to_first_valid_folder())
+     asyncio.run(test_download_storage_file())
      #asyncio.run(test_get_queue_items())
      asyncio.run(test_resolve_folder_from_queue())
      asyncio.run(test_download_and_upload_cross_tenant())
