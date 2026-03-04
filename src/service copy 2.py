@@ -1,60 +1,49 @@
-# Standard library
-import asyncio
-import json
-import logging
-import re
-import time
-import uuid
-import zipfile
-from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
-from enum import Enum
-from pathlib import Path
-from typing import Dict, List, Optional, Set
-import xml.etree.ElementTree as ET
 
-# Third-party
+import json
 import httpx
+from pathlib import Path
+import asyncio
+from typing import List, Dict, Set,Optional,TypedDict,NamedTuple
+import uuid 
+from enum import Enum
+from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
+import logging
+import zipfile
+import xml.etree.ElementTree as ET
+import re
+
+
 
 logger = logging.getLogger(__name__)
 
 
-    # =============================================================================
-    # Configuration Models
-    # =============================================================================
+# -----------------------------------------------------------------------------
+# Configuration Types
+# -----------------------------------------------------------------------------
 
-from dataclasses import dataclass
-from typing import Dict
-from enum import Enum
-
-
-@dataclass(frozen=True)
-class AuthConfig:
+class AuthConfig(TypedDict):
     client_id: str
     client_secret: str
 
 
-@dataclass(frozen=True)
-class TenantConfig:
+class TenantConfig(TypedDict):
     libraries_feed_id: str
 
 
-@dataclass(frozen=True)
-
-class AccountConfig:
+class AccountConfig(TypedDict):
     base_url: str
     auth: AuthConfig
     download_dir: str
-    tenants: Dict[str, TenantConfig]
+    tenants: dict[str, TenantConfig]
 
 
-@dataclass(frozen=True)
-class Config:
-    accounts: Dict[str, AccountConfig]
+class Config(TypedDict):
+    accounts: dict[str, AccountConfig]
 
-    # =============================================================================
-    # Enums
-    # =============================================================================
+# ==========================================================
+# ENUMS
+# ==========================================================
 
 class QueueItemStatus(str, Enum):
     New = "New"
@@ -65,40 +54,23 @@ class QueueItemStatus(str, Enum):
     Abandoned = "Abandoned"
     Deleted = "Deleted"
 
-
 class ResourceTypes(str, Enum):
     assets = "assets"
     queues = "queues"
     processes = "processes"
     triggers = "triggers"
     storage_buckets = "storage_buckets"
-    business_rules = "business_rules"
+    business_rules = "business_rules"  
 
     @property
     def is_linkable(self) -> bool:
-        return self.value in LINKABLE_RESOURCE_VALUES
+            return self.value in LinkableResourceTypes._value2member_map_
 
-
-class PackageType(str, Enum):
-    library = "library"
-    process = "process"
-
-    @property
-    def upload_suffix(self) -> str:
-        return "Libraries" if self is PackageType.library else "Processes"
-
-
-    # =============================================================================
-    # Resource Configuration
-    # =============================================================================
-
-@dataclass(frozen=True)
-class ResourceConfig:
+class ResourceConfig(NamedTuple):
     create_endpoint: str
     share_endpoint: str
     id_field: str
     payload_builder: str
-
 
 class LinkableResourceTypes(str, Enum):
     assets = "assets"
@@ -108,53 +80,62 @@ class LinkableResourceTypes(str, Enum):
 
     @property
     def config(self) -> ResourceConfig:
-        return LINKABLE_RESOURCE_CONFIGS[self]
+        configs = {
+            LinkableResourceTypes.assets: ResourceConfig(
+                create_endpoint="odata/Assets",
+                share_endpoint="odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="AssetIds",
+                payload_builder="_build_asset_payload",
+            ),
+            LinkableResourceTypes.queues: ResourceConfig(
+                create_endpoint="odata/QueueDefinitions",
+                share_endpoint="odata/QueueDefinitions/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="QueueIds",
+                payload_builder="_build_queue_payload",
+            ),
+            LinkableResourceTypes.storage_buckets: ResourceConfig(
+                create_endpoint="odata/Buckets",
+                share_endpoint="odata/Buckets/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="BucketIds",
+                payload_builder="_build_storage_bucket_payload",
+            ),
+                LinkableResourceTypes.business_rules: ResourceConfig(
+                create_endpoint="odata/BusinessRules",
+                share_endpoint="odata/BusinessRules/UiPath.Server.Configuration.OData.ShareToFolders",
+                id_field="BusinessRuleIds",
+                payload_builder="_build_business_rule_payload",
+    ),
+}
+        
+        return configs[self]
 
     def to_resource_type(self) -> ResourceTypes:
         return ResourceTypes(self.value)
 
+class PackageType(str, Enum):
+    library = "library"
+    process = "process"
 
-# Central registry (defined once, not rebuilt every call)
-LINKABLE_RESOURCE_CONFIGS: Dict[LinkableResourceTypes, ResourceConfig] = {
-    LinkableResourceTypes.assets: ResourceConfig(
-        create_endpoint="odata/Assets",
-        share_endpoint="odata/Assets/UiPath.Server.Configuration.OData.ShareToFolders",
-        id_field="AssetIds",
-        payload_builder="_build_asset_payload",
-    ),
-    LinkableResourceTypes.queues: ResourceConfig(
-        create_endpoint="odata/QueueDefinitions",
-        share_endpoint="odata/QueueDefinitions/UiPath.Server.Configuration.OData.ShareToFolders",
-        id_field="QueueIds",
-        payload_builder="_build_queue_payload",
-    ),
-    LinkableResourceTypes.storage_buckets: ResourceConfig(
-        create_endpoint="odata/Buckets",
-        share_endpoint="odata/Buckets/UiPath.Server.Configuration.OData.ShareToFolders",
-        id_field="BucketIds",
-        payload_builder="_build_storage_bucket_payload",
-    ),
-    LinkableResourceTypes.business_rules: ResourceConfig(
-        create_endpoint="odata/BusinessRules",
-        share_endpoint="odata/BusinessRules/UiPath.Server.Configuration.OData.ShareToFolders",
-        id_field="BusinessRuleIds",
-        payload_builder="_build_business_rule_payload",
-    ),
-}
-
-LINKABLE_RESOURCE_VALUES = {rt.value for rt in LinkableResourceTypes}
-
-
-# =============================================================================
-# Client Settings
-# =============================================================================
+    @property
+    def upload_suffix(self) -> str:
+        mapping = {
+            PackageType.library: "Libraries",
+            PackageType.process: "Processes",
+        }
+        return mapping[self]
 
 @dataclass(frozen=True)
 class OrchestratorClientSettings:
     max_internal_return: int = 100
     uipath_page_size: int = 100
-    max_retries: int = 2
-    retry_backoff_base: float = 0.5
+
+
+
+# -------------------------------------------------------------------------
+# Central Resource Registry
+# -------------------------------------------------------------------------
+
+
 
 # -----------------------------------------------------------------------------
 # Global configuration
@@ -204,10 +185,6 @@ class OrchestratorClient:
     - Returns clean domain objects
     """
 
-    # =========================================================================
-    # Constructor
-    # =========================================================================
-
 
     def __init__(self, account: str, tenant: str):  
         if account not in CONFIG["accounts"]:
@@ -231,9 +208,8 @@ class OrchestratorClient:
             "password": "DefaultPassword123!"
         }
         
-        self._access_token: str | None = None
-        self._token_expiry: datetime | None = None
 
+        self._access_token: str | None = None
 
         self.client = httpx.AsyncClient(
             timeout=30.0,
@@ -245,16 +221,8 @@ class OrchestratorClient:
     # Authentication
     # -------------------------------------------------------------------------
 
-    async def authenticate(self, force: bool = False) -> str:
-        now = datetime.now(timezone.utc)
-
-        # If token exists and is still valid, reuse it
-        if (
-            not force
-            and self._access_token
-            and self._token_expiry
-            and now < self._token_expiry
-        ):
+    async def authenticate(self) -> str:
+        if self._access_token:
             return self._access_token
 
         auth_url = f"{self.base_url}identity_/connect/token"
@@ -269,24 +237,12 @@ class OrchestratorClient:
         )
         r.raise_for_status()
 
-        data = r.json()
-
-        self._access_token = data["access_token"]
-
-        expires_in = data.get("expires_in", 3600)
-
-        # Add 60-second safety buffer
-        self._token_expiry = (
-            datetime.now(timezone.utc)
-            + timedelta(seconds=expires_in - 60)
-        )
-
+        self._access_token = r.json()["access_token"]
         return self._access_token
 
-
-    # =========================================================================
-    # Transport Layer
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # Headers
+    # -------------------------------------------------------------------------
 
     def _headers(self, folder_id: int | None = None, multipart: bool = False) -> dict:
         if not self._access_token:
@@ -307,100 +263,68 @@ class OrchestratorClient:
 
         return headers
 
-    def _build_url(self, endpoint: str) -> str:
-        return (
+    # -------------------------------------------------------------------------
+    # REST helpers (transport layer)
+    # -------------------------------------------------------------------------
+
+    async def get(self, endpoint: str, folder_id: int | None = None) -> dict:
+        if not self._access_token:
+            await self.authenticate()
+
+        url = (
             f"{self.base_url}{self.account}/orchestrator_/"
             f"{self.tenant}/{endpoint}"
         )
 
-    async def _ensure_authenticated(self):
-        await self.authenticate()
+        r = await self.client.get(url, headers=self._headers(folder_id))
+        r.raise_for_status()
+        return r.json()
 
-    async def _request(self, method: str, endpoint: str, *, folder_id: int | None = None, json: dict | None = None, files=None, params: dict | None = None, multipart: bool = False):
-        await self._ensure_authenticated()
+    async def post(self, endpoint: str,payload: dict, folder_id: int | None = None ) -> dict:
+        if not self._access_token:
+            await self.authenticate()
 
-        url = self._build_url(endpoint)
-        attempt = 0
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
 
-        while True:
-            start = time.perf_counter()
-
-            try:
-                response = await self.client.request(
-                    method,
-                    url,
-                    headers=self._headers(folder_id, multipart=multipart),
-                    json=json,
-                    files=files,
-                    params=params,
-                )
-            except httpx.RequestError as e:
-                # Network-level failure
-                if attempt >= self.settings.max_retries:
-                    raise
-
-                delay = self.settings.retry_backoff_base * (2 ** attempt)
-                logger.warning("Network error on %s %s. Retrying in %.2fs (attempt %s)", method, endpoint, delay, attempt + 1)
-                await asyncio.sleep(delay)
-                attempt += 1
-                continue
-
-            # 401 retry (token refresh)
-            if response.status_code == 401:
-                logger.warning("401 received. Refreshing token and retrying once: %s %s", method, endpoint)
-                await self.authenticate(force=True)
-                attempt += 1
-                continue
-
-            # Retry on transient status codes
-            if response.status_code in (429, 502, 503, 504):
-                if attempt >= self.settings.max_retries:
-                    response.raise_for_status()
-
-                retry_after = response.headers.get("Retry-After")
-                if retry_after and retry_after.isdigit():
-                    delay = float(retry_after)
-                else:
-                    delay = self.settings.retry_backoff_base * (2 ** attempt)
-
-                logger.warning(
-                    "Transient HTTP %s on %s %s. Retrying in %.2fs (attempt %s)",
-                    response.status_code,
-                    method,
-                    endpoint,
-                    delay,
-                    attempt + 1,
-                )
-
-                await asyncio.sleep(delay)
-                attempt += 1
-                continue
-
-            # Normal exit
-            duration_ms = (time.perf_counter() - start) * 1000
-            logger.debug("HTTP %s %s -> %s (%.1f ms)", method, endpoint, response.status_code, duration_ms)
-
-            response.raise_for_status()
-
-            if not response.content:
-                return {}
-
-            content_type = response.headers.get("Content-Type", "")
-
-            if "application/json" in content_type:
-                return response.json()
-
-            return response
+        r = await self.client.post(
+            url,
+            headers=self._headers(folder_id),
+            json=payload,
+        )
+        r.raise_for_status()
         
-    async def get(self, endpoint: str, folder_id: int | None = None) -> dict:
-        return await self._request("GET", endpoint, folder_id=folder_id)
-
-    async def post(self, endpoint: str, payload: dict, folder_id: int | None = None) -> dict:
-        return await self._request("POST", endpoint, folder_id=folder_id, json=payload)
-
-    async def put(self, endpoint: str, payload: dict, folder_id: int | None = None) -> dict:
-        return await self._request("PUT", endpoint, folder_id=folder_id, json=payload)
+        # Handle empty responses (204 No Content, etc.)
+        if r.status_code == 204 or not r.text.strip():
+            return {}
+        
+        return r.json()
     
+    async def put(self, endpoint: str, payload: dict, folder_id: int | None = None) -> dict:
+        if not self._access_token:
+            await self.authenticate()
+
+        url = (
+            f"{self.base_url}{self.account}/orchestrator_/"
+            f"{self.tenant}/{endpoint}"
+        )
+
+        r = await self.client.put(
+            url,
+            headers=self._headers(folder_id),
+            json=payload,
+        )
+
+        r.raise_for_status()
+
+        # handle 204 / empty body
+        if not r.content:
+            return {}
+
+        return r.json()
+        
     # -------------------------------------------------------------------------
     # OData normalization
     # -------------------------------------------------------------------------
@@ -416,165 +340,18 @@ class OrchestratorClient:
             return response["value"]
         return response
 
-    def _to_uipath_datetime(self, dt: datetime) -> str:
-        """
-        Convert datetime to UiPath OData v4 accepted format:
-        yyyy-MM-ddTHH:mm:ssZ
-        - UTC timezone indicated by Z suffix
-        - No microseconds
-        - No datetime'' wrapper (that's OData v3)
-        """
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(timezone.utc)
+    # -------------------------------------------------------------------------
+    # Domain methods (collections return lists)
+    # -------------------------------------------------------------------------
 
-        dt = dt.replace(microsecond=0)
-
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    
-    # =========================================================================
-    # Folder Management
-    # =========================================================================
-    
     async def get_folders(self) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/Folders"))
 
-    async def resolve_folder_path(self, path: str) -> dict:
-        """
-        Resolve a folder path without creating it.
+    async def get_assets(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/Assets", folder_id))
 
-        Raises RuntimeError if path does not exist.
-        """
-
-        if not path or not path.strip():
-            raise ValueError("path cannot be empty")
-
-        segments = [seg.strip() for seg in path.split("/") if seg.strip()]
-        if not segments:
-            raise ValueError("Invalid folder path")
-
-        folders = await self.get_folders()
-
-        index = {
-            (f.get("ParentId"), f["DisplayName"]): f
-            for f in folders
-        }
-
-        current_parent_id = None
-        current_folder = None
-
-        for segment in segments:
-            key = (current_parent_id, segment)
-
-            if key not in index:
-                raise RuntimeError(f"Folder path not found: {path}")
-
-            current_folder = index[key]
-            current_parent_id = current_folder["Id"]
-
-        return current_folder
-
-    async def create_folder(self,new_folder_name: str,parent_id: int | None = None,description: str | None = None) -> dict:
-        """
-        Create a modern folder in the current tenant.
-
-        Supports nested folders via parent_id.
-        """
-
-        name = (new_folder_name or "").strip()
-        if not name:
-            raise ValueError("new_folder_name cannot be empty")
-
-        payload = {
-            "DisplayName": name,
-            "Description": description or "",
-            "ProvisionType": "Automatic",
-            "ParentId": parent_id,
-        }
-
-        return await self.post("odata/Folders", payload)
-   
-    async def ensure_folder_path(self, path: str) -> dict:
-        """
-        Ensure that a nested folder path exists.
-        Creates missing segments.
-        Returns final folder.
-        """
-
-        if not path or not path.strip():
-            raise ValueError("path cannot be empty")
-
-        segments = [seg.strip() for seg in path.split("/") if seg.strip()]
-        if not segments:
-            raise ValueError("Invalid folder path")
-
-        folders = await self.get_folders()
-
-        index = {
-            (f.get("ParentId"), f["DisplayName"]): f
-            for f in folders
-        }
-
-        current_parent_id = None
-        current_folder = None
-
-        for segment in segments:
-            key = (current_parent_id, segment)
-
-            if key in index:
-                current_folder = index[key]
-                current_parent_id = current_folder["Id"]
-            else:
-                new_folder = await self.create_folder(
-                    new_folder_name=segment,
-                    parent_id=current_parent_id
-                )
-
-                current_folder = new_folder
-                current_parent_id = new_folder["Id"]
-
-                # Update index for next segment resolution
-                index[(new_folder.get("ParentId"), new_folder["DisplayName"])] = new_folder
-
-        return current_folder
-    
-    @staticmethod
-    def _build_folder_tree(folders: list[dict]) -> list[dict]:
-        """
-        Convert flat UiPath folder list into nested tree structure.
-        Preserves all original fields and adds 'children'.
-        This should help the llm to "understand" the structure in a more natural way
-        """
-
-        # Create copy of folders indexed by Id
-        by_id: dict[int, dict] = {}
-
-        for folder in folders:
-            folder_copy = dict(folder)  # avoid mutating original
-            folder_copy["children"] = []
-            by_id[folder["Id"]] = folder_copy
-
-        root_nodes: list[dict] = []
-
-        for folder in by_id.values():
-            parent_id = folder.get("ParentId")
-
-            if parent_id and parent_id in by_id:
-                by_id[parent_id]["children"].append(folder)
-            else:
-                root_nodes.append(folder)
-
-        return root_nodes
-    
-    async def get_folders_tree(self) -> dict:
-        """
-        Return folders as nested JSON tree.
-        Output format:
-        {
-            "result": [ ...tree... ]
-        }
-        """
-        folders = await self.get_folders()
-        return self._build_folder_tree(folders)
+    async def get_queues(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
     
     async def _resolve_folder_from_queue(self, queue_id: int) -> int:
         """
@@ -596,28 +373,33 @@ class OrchestratorClient:
                 if q["Id"] == queue_id:
                     return folder_id
     
-    
-    # =========================================================================
-    # Resource Operations
-    # =========================================================================
-
-    
-    async def get_assets(self, folder_id: int) -> list[dict]:
-        return self._unwrap_odata(await self.get("odata/Assets", folder_id))
-
-    async def get_queues(self, folder_id: int) -> list[dict]:
-        return self._unwrap_odata(await self.get("odata/QueueDefinitions", folder_id))
-    
     async def get_business_rules(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/BusinessRules", folder_id))
 
-    async def get_storage_buckets(self, folder_id: int) -> list[dict]:
-        return self._unwrap_odata(await self.get("odata/Buckets", folder_id))  
-    
-    async def get_triggers(self, folder_id: int) -> list[dict]:
-        return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
-    
-    async def get_queue_items(self,queue_id: int,skip: int = 0,start_time: Optional[datetime] = None,end_time: Optional[datetime] = None,statuses: Optional[List[QueueItemStatus]] = None,reference: Optional[str] = None) -> Dict:
+    def _to_uipath_datetime(self, dt: datetime) -> str:
+        """
+        Convert datetime to UiPath OData v4 accepted format:
+        yyyy-MM-ddTHH:mm:ssZ
+        - UTC timezone indicated by Z suffix
+        - No microseconds
+        - No datetime'' wrapper (that's OData v3)
+        """
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+
+        dt = dt.replace(microsecond=0)
+
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def get_queue_items(
+        self,
+        queue_id: int,
+        skip: int = 0,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        statuses: Optional[List[QueueItemStatus]] = None,
+        reference: Optional[str] = None,
+    ) -> Dict:
 
         if not queue_id:
             raise ValueError("queue_id is required")
@@ -716,79 +498,15 @@ class OrchestratorClient:
             "items": collected,
         }
     
+    async def get_triggers(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/ProcessSchedules", folder_id))
+
     async def get_processes(self, folder_id: int) -> list[dict]:
         return self._unwrap_odata(await self.get("odata/Releases", folder_id))
     
-    async def get_storage_files(self,folder_id: int,bucket_id: int) -> list[dict]:
-        """
-        List all files inside a storage bucket.
-        
-        Args:
-            folder_id: Folder containing the bucket
-            bucket_id: ID of the storage bucket
-            directory: Directory path to list (default: "/" for root)
-            recursive: Whether to list files recursively in subdirectories
-        
-        Returns:
-            List of file objects with properties:
-            - FullPath: Full path/name of the file in the bucket
-            - ContentType: MIME type (e.g., "application/json")
-            - Size: File size in bytes
-            - IsDirectory: Whether this is a directory (bool or null)
-            - Id: File ID (appears to be null in API response)
-            
-        Note: Files have FullPath but no separate Name property.
-            Use FullPath.split('/')[-1] to extract just the filename.
-        """
-        endpoint = (
-            f"odata/Buckets({bucket_id})/"
-            f"UiPath.Server.Configuration.OData.GetFiles"
-            f"?directory=/&recursive={'true'}"
-        )
-        
-        data = await self.get(endpoint, folder_id=folder_id)
-        return self._unwrap_odata(data)
-
-    async def get_resources(self,resource_types: list[ResourceTypes],folder_id: int) -> dict[str, list | dict]:
-
-        if not resource_types:
-            raise ValueError("resource_types cannot be empty")
-
-        tasks = {
-            rt: self._resource_getters[rt](folder_id)
-            for rt in resource_types
-        }
-
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-        response: dict[str, list | dict] = {}
-
-        for resource_type, result in zip(tasks.keys(), results):
-            if isinstance(result, Exception):
-                response[resource_type.value] = {"error": str(result)}
-                continue
-
-            items = result or []
-
-            if resource_type.is_linkable:
-                items = await self._attach_linked_folders(items, resource_type.value)
-
-            response[resource_type.value] = items
-
-        return response
-
-    @property
-    def _resource_getters(self) -> dict[ResourceTypes, callable]:
-        return {
-            ResourceTypes.assets: self.get_assets,
-            ResourceTypes.queues: self.get_queues,
-            ResourceTypes.processes: self.get_processes,
-            ResourceTypes.triggers: self.get_triggers,
-            ResourceTypes.storage_buckets: self.get_storage_buckets,
-            ResourceTypes.business_rules: self.get_business_rules,
-            
-        }
-
+    async def get_storage_buckets(self, folder_id: int) -> list[dict]:
+        return self._unwrap_odata(await self.get("odata/Buckets", folder_id))  
+    
     async def download_storage_file(self,folder_id: int,bucket_id: int,file_path: str) -> Path:
         """
         Download a storage file using the two-step Cloud API pattern:
@@ -835,12 +553,209 @@ class OrchestratorClient:
 
         return path
 
+    async def get_storage_files(self,folder_id: int,bucket_id: int) -> list[dict]:
+        """
+        List all files inside a storage bucket.
+        
+        Args:
+            folder_id: Folder containing the bucket
+            bucket_id: ID of the storage bucket
+            directory: Directory path to list (default: "/" for root)
+            recursive: Whether to list files recursively in subdirectories
+        
+        Returns:
+            List of file objects with properties:
+            - FullPath: Full path/name of the file in the bucket
+            - ContentType: MIME type (e.g., "application/json")
+            - Size: File size in bytes
+            - IsDirectory: Whether this is a directory (bool or null)
+            - Id: File ID (appears to be null in API response)
+            
+        Note: Files have FullPath but no separate Name property.
+            Use FullPath.split('/')[-1] to extract just the filename.
+        """
+        endpoint = (
+            f"odata/Buckets({bucket_id})/"
+            f"UiPath.Server.Configuration.OData.GetFiles"
+            f"?directory=/&recursive={'true'}"
+        )
+        
+        data = await self.get(endpoint, folder_id=folder_id)
+        return self._unwrap_odata(data)
 
-    # =========================================================================
-    # Linking Operations
-    # =========================================================================
 
-    async def link_resource_to_folder(self,linkable_resource_type: LinkableResourceTypes,resource_name: str,candidate_folder_paths: list[str],target_folder_path: str,expected_value_type: Optional[str] = None) -> dict:
+
+    @property
+    def _resource_getters(self) -> dict[ResourceTypes, callable]:
+        return {
+            ResourceTypes.assets: self.get_assets,
+            ResourceTypes.queues: self.get_queues,
+            ResourceTypes.processes: self.get_processes,
+            ResourceTypes.triggers: self.get_triggers,
+            ResourceTypes.storage_buckets: self.get_storage_buckets,
+            ResourceTypes.business_rules: self.get_business_rules,
+            
+        }
+
+    async def list_libraries(self) -> list[str]:
+        data = await self.get("odata/Libraries")
+        return sorted(
+            lib["Id"]
+            for lib in self._unwrap_odata(data)
+            if lib.get("Id")
+        )
+    
+# -------------------------------------------------------------------------
+# Payload builders
+# -------------------------------------------------------------------------
+
+    async def _build_asset_payload(self, asset_spec: dict) -> dict:
+
+        name = asset_spec.get("Name")
+        value_type = asset_spec.get("ValueType")
+        value = asset_spec.get("Value")
+
+        if not value_type:
+            raise ValueError("Asset spec must include 'ValueType'")
+
+        payload = {
+            "Name": name,
+            "ValueType": value_type,
+            "ValueScope": "Global",
+        }
+
+        if value_type == "Text":
+            payload["StringValue"] = value
+
+        elif value_type == "Bool":
+            payload["BoolValue"] = value
+
+        elif value_type == "Integer":
+            payload["IntValue"] = value
+
+        elif value_type == "Credential":
+            payload["CredentialUsername"] = self._credential_defaults["username"]
+            payload["CredentialPassword"] = self._credential_defaults["password"]
+
+        else:
+            raise ValueError(f"Unsupported ValueType: {value_type}")
+
+        return payload
+    async def _build_queue_payload(self, queue_spec: dict) -> dict:
+
+        name = queue_spec.get("Name")
+        if not name:
+            raise ValueError("Queue spec must include 'Name'")
+
+        return {
+            "Name": name,
+            "Description": queue_spec.get("Description", ""),
+            "MaxNumberOfRetries": queue_spec.get("MaxNumberOfRetries", 0),
+            "AcceptAutomaticallyRetry": queue_spec.get("AcceptAutomaticallyRetry", False),
+        }
+    async def _build_storage_bucket_payload(self, bucket_spec: dict) -> dict:
+       
+        name = bucket_spec.get("Name")
+        if not name:
+            raise ValueError("Bucket spec must include 'Name'")
+        
+        # Generate UUID for Identifier (REQUIRED by API)
+        identifier = str(uuid.uuid4())
+        
+        return {
+            "Name": name,
+            "Identifier": identifier,  # THIS IS THE FIX!
+            "Description": bucket_spec.get("Description", ""),
+        }
+# -------------------------------------------------------------------------
+# Folder tree builder
+# -------------------------------------------------------------------------
+
+    @staticmethod
+
+    def _build_folder_tree(folders: list[dict]) -> list[dict]:
+        """
+        Convert flat UiPath folder list into nested tree structure.
+        Preserves all original fields and adds 'children'.
+        This should help the llm to "understand" the structure in a more natural way
+        """
+
+        # Create copy of folders indexed by Id
+        by_id: dict[int, dict] = {}
+
+        for folder in folders:
+            folder_copy = dict(folder)  # avoid mutating original
+            folder_copy["children"] = []
+            by_id[folder["Id"]] = folder_copy
+
+        root_nodes: list[dict] = []
+
+        for folder in by_id.values():
+            parent_id = folder.get("ParentId")
+
+            if parent_id and parent_id in by_id:
+                by_id[parent_id]["children"].append(folder)
+            else:
+                root_nodes.append(folder)
+
+        return root_nodes
+
+    async def get_folders_tree(self) -> dict:
+        """
+        Return folders as nested JSON tree.
+        Output format:
+        {
+            "result": [ ...tree... ]
+        }
+        """
+        folders = await self.get_folders()
+        return self._build_folder_tree(folders)
+    
+    # -------------------------------------------------------------------------
+    # Consolidated folder-scoped resource fetch
+    # -------------------------------------------------------------------------
+    async def get_resources(self,resource_types: list[ResourceTypes],folder_id: int) -> dict[str, list | dict]:
+
+        if not resource_types:
+            raise ValueError("resource_types cannot be empty")
+
+        tasks = {
+            rt: self._resource_getters[rt](folder_id)
+            for rt in resource_types
+        }
+
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        response: dict[str, list | dict] = {}
+
+        for resource_type, result in zip(tasks.keys(), results):
+            if isinstance(result, Exception):
+                response[resource_type.value] = {"error": str(result)}
+                continue
+
+            items = result or []
+
+            if resource_type.is_linkable:
+                items = await self._attach_linked_folders(items, resource_type.value)
+
+            response[resource_type.value] = items
+
+        return response
+
+
+# -------------------------------------------------------------------------
+# Generic cross-folder linker
+# -------------------------------------------------------------------------
+
+   
+    async def link_resource_to_folder(
+        self,
+        linkable_resource_type: LinkableResourceTypes,
+        resource_name: str,
+        candidate_folder_paths: list[str],
+        target_folder_path: str,
+        expected_value_type: Optional[str] = None
+    ) -> dict:
         """
         Link an existing shared resource into a target folder.
 
@@ -925,9 +840,113 @@ class OrchestratorClient:
             "resource_id": None,
             "linked_to": None,
             "reason": "no_matching_candidate_folder",
-        }  
+        }
+    # -------------------------------------------------------------------------
+    # Folder management
+    # -------------------------------------------------------------------------
     
-    async def ensure_resource_in_folder(self,linkable_resource_type: LinkableResourceTypes, folder_path: str, resource_spec: dict) -> dict:
+    
+    async def resolve_folder_path(self, path: str) -> dict:
+        """
+        Resolve a folder path without creating it.
+
+        Raises RuntimeError if path does not exist.
+        """
+
+        if not path or not path.strip():
+            raise ValueError("path cannot be empty")
+
+        segments = [seg.strip() for seg in path.split("/") if seg.strip()]
+        if not segments:
+            raise ValueError("Invalid folder path")
+
+        folders = await self.get_folders()
+
+        index = {
+            (f.get("ParentId"), f["DisplayName"]): f
+            for f in folders
+        }
+
+        current_parent_id = None
+        current_folder = None
+
+        for segment in segments:
+            key = (current_parent_id, segment)
+
+            if key not in index:
+                raise RuntimeError(f"Folder path not found: {path}")
+
+            current_folder = index[key]
+            current_parent_id = current_folder["Id"]
+
+        return current_folder
+
+    async def create_folder(self,new_folder_name: str,parent_id: int | None = None,description: str | None = None) -> dict:
+        """
+        Create a modern folder in the current tenant.
+
+        Supports nested folders via parent_id.
+        """
+
+        name = (new_folder_name or "").strip()
+        if not name:
+            raise ValueError("new_folder_name cannot be empty")
+
+        payload = {
+            "DisplayName": name,
+            "Description": description or "",
+            "ProvisionType": "Automatic",
+            "ParentId": parent_id,
+        }
+
+        return await self.post("odata/Folders", payload)
+    
+    async def ensure_folder_path(self, path: str) -> dict:
+        """
+        Ensure that a nested folder path exists.
+        Creates missing segments.
+        Returns final folder.
+        """
+
+        if not path or not path.strip():
+            raise ValueError("path cannot be empty")
+
+        segments = [seg.strip() for seg in path.split("/") if seg.strip()]
+        if not segments:
+            raise ValueError("Invalid folder path")
+
+        folders = await self.get_folders()
+
+        index = {
+            (f.get("ParentId"), f["DisplayName"]): f
+            for f in folders
+        }
+
+        current_parent_id = None
+        current_folder = None
+
+        for segment in segments:
+            key = (current_parent_id, segment)
+
+            if key in index:
+                current_folder = index[key]
+                current_parent_id = current_folder["Id"]
+            else:
+                new_folder = await self.create_folder(
+                    new_folder_name=segment,
+                    parent_id=current_parent_id
+                )
+
+                current_folder = new_folder
+                current_parent_id = new_folder["Id"]
+
+                # Update index for next segment resolution
+                index[(new_folder.get("ParentId"), new_folder["DisplayName"])] = new_folder
+
+        return current_folder
+       
+    async def ensure_resource_in_folder(self,linkable_resource_type: LinkableResourceTypes, folder_path: str, resource_spec: dict
+    ) -> dict:
 
         name = resource_spec.get("Name")
         if not name:
@@ -1027,86 +1046,13 @@ class OrchestratorClient:
             for item in items
         ]
    
-
-
-    # -------------------------------------------------------------------------
-    # Payload builders
-    # -------------------------------------------------------------------------
-
-    async def _build_asset_payload(self, asset_spec: dict) -> dict:
-
-        name = asset_spec.get("Name")
-        value_type = asset_spec.get("ValueType")
-        value = asset_spec.get("Value")
-
-        if not value_type:
-            raise ValueError("Asset spec must include 'ValueType'")
-
-        payload = {
-            "Name": name,
-            "ValueType": value_type,
-            "ValueScope": "Global",
-        }
-
-        if value_type == "Text":
-            payload["StringValue"] = value
-
-        elif value_type == "Bool":
-            payload["BoolValue"] = value
-
-        elif value_type == "Integer":
-            payload["IntValue"] = value
-
-        elif value_type == "Credential":
-            payload["CredentialUsername"] = self._credential_defaults["username"]
-            payload["CredentialPassword"] = self._credential_defaults["password"]
-
-        else:
-            raise ValueError(f"Unsupported ValueType: {value_type}")
-
-        return payload
-    async def _build_queue_payload(self, queue_spec: dict) -> dict:
-
-        name = queue_spec.get("Name")
-        if not name:
-            raise ValueError("Queue spec must include 'Name'")
-
-        return {
-            "Name": name,
-            "Description": queue_spec.get("Description", ""),
-            "MaxNumberOfRetries": queue_spec.get("MaxNumberOfRetries", 0),
-            "AcceptAutomaticallyRetry": queue_spec.get("AcceptAutomaticallyRetry", False),
-        }
-    async def _build_storage_bucket_payload(self, bucket_spec: dict) -> dict:
-       
-        name = bucket_spec.get("Name")
-        if not name:
-            raise ValueError("Bucket spec must include 'Name'")
-        
-        # Generate UUID for Identifier (REQUIRED by API)
-        identifier = str(uuid.uuid4())
-        
-        return {
-            "Name": name,
-            "Identifier": identifier,  # THIS IS THE FIX!
-            "Description": bucket_spec.get("Description", ""),
-        }
-
-
    
-    
+   
+   
     # -------------------------------------------------------------------------
-    # Package / NuGet Operations
+    # NuGet helpers
     # -------------------------------------------------------------------------
 
-    async def list_libraries(self) -> list[str]:
-        data = await self.get("odata/Libraries")
-        return sorted(
-            lib["Id"]
-            for lib in self._unwrap_odata(data)
-            if lib.get("Id")
-        )
-    
     async def list_library_versions(self, package_id: str) -> list[str]:
         if not self._access_token:
             await self.authenticate()
@@ -1195,6 +1141,7 @@ class OrchestratorClient:
 
         return path
 
+    
     async def download_package_odata(self,package_name: str,version: str,folder_id: int) -> Path:
         if not package_name or not version:
             raise ValueError("package_name and version are required")
@@ -1278,7 +1225,12 @@ class OrchestratorClient:
 
         return r.json()
     
-    async def upload_single_package(self,local_path: Path | str,folder_id: int,overwrite: bool = False) -> dict:
+    async def upload_single_package(
+        self,
+        local_path: Path | str,
+        folder_id: int,
+        overwrite: bool = False
+    ) -> dict:
 
         local_path = Path(local_path)
 
@@ -1325,6 +1277,86 @@ class OrchestratorClient:
             "status": "uploaded",
             "package": local_path.name
         }
+
+    async def create_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: str = "Main.xaml") -> dict:
+        """
+        Create a Release (Process) in a specific folder.
+        Equivalent to POST odata/Releases
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        payload = {
+            "Name": release_name or f"{process_key}_{version}",
+            "ProcessKey": process_key,
+            "ProcessVersion": version,
+            "EntryPointPath": entry_point,
+        }
+
+        return await self.post("odata/Releases", payload, folder_id=folder_id)
+
+    async def ensure_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: Optional[str] =None) -> dict:
+        """
+        Idempotent release creation.
+
+        - If release exists → returns it
+        - If not → creates it
+        - Always returns consistent response structure
+        """
+
+        if not process_key:
+            raise ValueError("process_key is required")
+
+        if not version:
+            raise ValueError("version is required")
+
+        release_name = release_name or f"{process_key}_{version}"
+
+        # Check existence by Name (unique per folder)
+        endpoint = f"odata/Releases?$filter=Name eq '{release_name}'"
+        
+        entry_point = entry_point or "Main.xaml"
+        
+        existing = self._unwrap_odata(
+            await self.get(endpoint, folder_id=folder_id)
+        )
+
+        if existing:
+            return {
+                "status": "already_exists",
+                "release": existing[0],
+            }
+
+        try:
+            created = await self.create_release(
+                folder_id=folder_id,
+                process_key=process_key,
+                version=version,
+                release_name=release_name,
+                entry_point=entry_point,
+            )
+
+            return {
+                "status": "created",
+                "release": created,
+            }
+
+        except httpx.HTTPStatusError as e:
+            # Race-condition safe: if another call created it simultaneously
+            if e.response.status_code == 409:
+                existing = self._unwrap_odata(
+                    await self.get(endpoint, folder_id=folder_id)
+                )
+                if existing:
+                    return {
+                        "status": "already_exists",
+                        "release": existing[0],
+                    }
+            raise
 
     @staticmethod
     def parse_nupkg_metadata(nupkg_path: Path | str) -> dict:
@@ -1416,7 +1448,12 @@ class OrchestratorClient:
             "dependencies": dependencies,
         }
 
-    async def download_package_with_dependencies(self,package_name: str,version: str,source_folder_id: int) -> Dict:
+    async def download_package_with_dependencies(
+        self,        # OrchestratorClient (source)
+        package_name: str,
+        version: str,
+        source_folder_id: int,
+    ) -> Dict:
         """
         Download root package and all internal dependencies.
 
@@ -1491,98 +1528,9 @@ class OrchestratorClient:
 
         return {"packages": packages, "cycles_detected": cycles_detected}
   
-  
-    # -------------------------------------------------------------------------
-    # Release Management
-    # -------------------------------------------------------------------------
-
-
-    async def create_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: str = "Main.xaml") -> dict:
-        """
-        Create a Release (Process) in a specific folder.
-        Equivalent to POST odata/Releases
-        """
-
-        if not process_key:
-            raise ValueError("process_key is required")
-
-        if not version:
-            raise ValueError("version is required")
-
-        payload = {
-            "Name": release_name or f"{process_key}_{version}",
-            "ProcessKey": process_key,
-            "ProcessVersion": version,
-            "EntryPointPath": entry_point,
-        }
-
-        return await self.post("odata/Releases", payload, folder_id=folder_id)
-
-    async def ensure_release(self, folder_id: int, process_key: str, version: str, release_name: Optional[str] = None, entry_point: Optional[str] =None) -> dict:
-        """
-        Idempotent release creation.
-
-        - If release exists → returns it
-        - If not → creates it
-        - Always returns consistent response structure
-        """
-
-        if not process_key:
-            raise ValueError("process_key is required")
-
-        if not version:
-            raise ValueError("version is required")
-
-        release_name = release_name or f"{process_key}_{version}"
-
-        # Check existence by Name (unique per folder)
-        endpoint = f"odata/Releases?$filter=Name eq '{release_name}'"
-        
-        entry_point = entry_point or "Main.xaml"
-        
-        existing = self._unwrap_odata(
-            await self.get(endpoint, folder_id=folder_id)
-        )
-
-        if existing:
-            return {
-                "status": "already_exists",
-                "release": existing[0],
-            }
-
-        try:
-            created = await self.create_release(
-                folder_id=folder_id,
-                process_key=process_key,
-                version=version,
-                release_name=release_name,
-                entry_point=entry_point,
-            )
-
-            return {
-                "status": "created",
-                "release": created,
-            }
-
-        except httpx.HTTPStatusError as e:
-            # Race-condition safe: if another call created it simultaneously
-            if e.response.status_code == 409:
-                existing = self._unwrap_odata(
-                    await self.get(endpoint, folder_id=folder_id)
-                )
-                if existing:
-                    return {
-                        "status": "already_exists",
-                        "release": existing[0],
-                    }
-            raise
-
-
     # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
-
-
 
     async def close(self):
         await self.client.aclose()
