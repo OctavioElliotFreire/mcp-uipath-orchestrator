@@ -181,11 +181,11 @@ To use this MCP server with Claude Desktop, add the following to your `claude_de
 }
 ```
 
-> On **Windows**, the config file is located at:
-> `%APPDATA%\Claude\claude_desktop_config.json`
+> **Tip:** You can open the config directly from Claude Desktop via **Settings** → **Developer** → **Edit Config**.
 >
-> On **macOS**, it is located at:
-> `~/Library/Application Support/Claude/claude_desktop_config.json`
+> Or navigate to the file manually:
+> - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+> - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ---
 
