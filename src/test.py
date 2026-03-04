@@ -6,7 +6,6 @@ Uncomment the test you want to run at the bottom
 """
 import json
 import asyncio
-import json
 from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFIG,get_available_accounts,get_available_tenants
 import logging
 
