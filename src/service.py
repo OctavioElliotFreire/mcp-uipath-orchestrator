@@ -114,6 +114,14 @@ class LinkableResourceTypes(str, Enum):
         return ResourceTypes(self.value)
 
 
+class LogSeverity(str, Enum):
+    Fatal = "Fatal"
+    Error = "Error"
+    Warn = "Warn"
+    Info = "Info"
+    Trace = "Trace"
+
+
 # Central registry (defined once, not rebuilt every call)
 LINKABLE_RESOURCE_CONFIGS: Dict[LinkableResourceTypes, ResourceConfig] = {
     LinkableResourceTypes.assets: ResourceConfig(
@@ -749,6 +757,85 @@ class OrchestratorClient:
         data = await self.get(endpoint, folder_id=folder_id)
         return self._unwrap_odata(data)
 
+    async def get_audit_logs(self, top: int = 100, skip: int = 0) -> tuple[list[dict], int]:
+
+        response = await self.get(
+            f"odata/AuditLogs"
+            f"?$top={top}"
+            f"&$skip={skip}"
+            f"&$count=true"
+            f"&$orderby=ExecutionTime desc"
+        )
+
+        count = response.get("@odata.count", 0)
+
+        alerts = [
+            {
+                "Source": "AuditLog",
+                "Severity": "Information",
+                "CreationTime": item.get("ExecutionTime"),
+                "Component": item.get("Component", item.get("ServiceName", "")),
+                "Message": item.get("OperationText", ""),
+                "Action": item.get("Action"),
+                "UserName": item.get("UserName"),
+                "FolderName": None,
+                "FolderId": None,
+                "JobKey": None,
+            }
+            for item in self._unwrap_odata(response)
+        ]
+
+        return alerts, count
+
+    async def get_robot_logs(self, severities: Optional[List[LogSeverity]] = None, top: int = 100, skip: int = 0, folder_ids: Optional[List[int]] = None) -> tuple[list[dict], int, list[str]]:
+
+        alerts: list[dict] = []
+        total_count = 0
+        folders_with_logs: list[str] = []
+
+        level_filter = self._build_robot_log_filter(severities)
+        folders = await self._resolve_folders_to_scan(folder_ids)
+
+        per_folder_top = max(top, 100)
+
+        results = await asyncio.gather(*[
+            self._request(
+                "GET",
+                f"odata/RobotLogs"
+                f"?$top={per_folder_top}"
+                f"&$skip={skip}"
+                f"&$count=true"
+                f"&$orderby=TimeStamp desc"
+                f"&$filter={level_filter}",
+                folder_id=folder["Id"],
+            )
+            for folder in folders
+        ], return_exceptions=True)
+
+        for folder, result in zip(folders, results):
+
+            if isinstance(result, Exception):
+                logger.debug(
+                    "RobotLogs failed for folder '%s': %s",
+                    folder["DisplayName"], result
+                )
+                continue
+
+            folder_count = result.get("@odata.count", 0)
+            total_count += folder_count
+
+            if folder_count > 0:
+                folders_with_logs.append(
+                    f"{folder['DisplayName']} ({folder_count})"
+                )
+
+            alerts.extend(
+                self._map_robot_alert(item, folder)
+                for item in self._unwrap_odata(result)
+            )
+
+        return alerts, total_count, folders_with_logs
+   
     async def get_resources(self,resource_types: list[ResourceTypes],folder_id: int) -> dict[str, list | dict]:
 
         if not resource_types:
@@ -777,6 +864,57 @@ class OrchestratorClient:
 
         return response
 
+    def _build_robot_log_filter(self, severities: Optional[List[LogSeverity]]) -> str:
+
+        if not severities:
+            severities = [LogSeverity.Fatal, LogSeverity.Error, LogSeverity.Warn]
+
+        levels = [sev.value for sev in severities]
+
+        level_filter = " or ".join(f"Level eq '{lvl}'" for lvl in levels)
+
+        if len(levels) > 1:
+            level_filter = f"({level_filter})"
+
+        return level_filter
+    
+    async def _resolve_folders_to_scan(self, folder_ids: Optional[List[int]]) -> List[dict]:
+
+        all_folders = await self.get_folders()
+
+        if not folder_ids:
+            return all_folders
+
+        by_id = {f["Id"]: f for f in all_folders}
+        return [by_id[fid] for fid in folder_ids if fid in by_id]
+    
+    def _map_robot_alert(self, item: dict, folder: dict) -> dict:
+        return {
+            "Source": "RobotLog",
+            "Severity": item.get("Level", ""),
+            "CreationTime": item.get("TimeStamp"),
+            "Component": item.get("ProcessName", ""),
+            "Message": item.get("Message", ""),
+            "Action": None,
+            "UserName": item.get("RobotName"),
+            "FolderName": folder["DisplayName"],
+            "FolderId": folder["Id"],
+            "JobKey": item.get("JobKey"),
+        }
+    
+    def _map_audit_alert(self, item: dict) -> dict:
+        return {
+            "Source": "AuditLog",
+            "Severity": "Information",
+            "CreationTime": item.get("ExecutionTime"),
+            "Component": item.get("Component", item.get("ServiceName", "")),
+            "Message": item.get("OperationText", ""),
+            "Action": item.get("Action"),
+            "UserName": item.get("UserName"),
+            "FolderName": None,
+            "FolderId": None,
+            "JobKey": None,
+        }
     @property
     def _resource_getters(self) -> dict[ResourceTypes, callable]:
         return {

@@ -6,7 +6,9 @@ Uncomment the test you want to run at the bottom
 """
 import json
 import asyncio
-from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFIG,get_available_accounts,get_available_tenants
+
+import httpx
+from service import OrchestratorClient,ResourceTypes,LinkableResourceTypes,CONFIG,get_available_accounts,get_available_tenants,QueueItemStatus,LogSeverity
 import logging
 
 
@@ -204,9 +206,10 @@ async def test_get_resources():
 
 async def test_get_queue_items():
     print("\n" + "=" * 60)
-    print("TEST: get_queue_items() — ALL QUEUES")
+    print("TEST: get_queue_items() — FULL OUTPUT")
     print("=" * 60)
 
+   
     pairs = get_all_account_tenant_pairs()
 
     if not pairs:
@@ -214,7 +217,8 @@ async def test_get_queue_items():
         return False
 
     account, tenant = pairs[1]
-    print(f"Using: {account}/{tenant}")
+    key = f"{account}/{tenant}"
+    print(f"Using: {key}")
 
     client = OrchestratorClient(account, tenant)
 
@@ -227,81 +231,285 @@ async def test_get_queue_items():
             print("No folders found.")
             return False
 
-        total_items_across_all_queues = 0
-
-        # ----------------------------------------------------
-        # Iterate all folders
-        # ----------------------------------------------------
-        for folder in folders:
-            folder_id = folder["Id"]
-            folder_name = folder["DisplayName"]
+        # Test first 3 folders
+        for folder in folders[:3]:
 
             print("\n" + "-" * 60)
-            print(f"📁 Folder: {folder_name} ({folder_id})")
+            print(f"📁 Folder: {folder['DisplayName']} ({folder['Id']})")
             print("-" * 60)
 
-            queues = await client.get_queues(folder_id)
+            queues = await client.get_queues(folder["Id"])
 
             if not queues:
-                print("No queues in this folder.")
+                print("No queues found in this folder.")
                 continue
 
-            # ------------------------------------------------
-            # Iterate all queues in folder
-            # ------------------------------------------------
-            for queue in queues:
-                queue_id = queue["Id"]
-                queue_name = queue["Name"]
+            for queue in queues[:2]:
 
-                print(f"\n🎯 Queue: {queue_name} ({queue_id})")
+                print("\n" + "=" * 50)
+                print(f"QUEUE: {queue['Name']} ({queue['Id']})")
+                print("=" * 50)
 
-                try:
-                    skip = 0
-                    queue_total = 0
+                result = await client.get_queue_items(
+                    queue_id=queue["Id"],
+                    skip=0,
+                    statuses=[QueueItemStatus.Failed, QueueItemStatus.Abandoned]
+                )
 
-                    while True:
-                        result = await client.get_queue_items(
-                            queue_id=queue_id,
-                            skip=skip
-                        )
+                print("\nQueue Items Metadata:")
+                print(json.dumps({
+                    "total_available": result["total_available"],
+                    "returned": result["returned"],
+                    "skip": result["skip"],
+                    "next_skip": result["next_skip"],
+                    "has_more": result["has_more"],
+                    "limit": result["limit"]
+                }, indent=4))
 
-                        items = result["items"]
-                        returned = result["returned"]
+                items = result.get("items", [])
 
-                        print(
-                            f"   → Page returned {returned} items "
-                            f"(skip={skip})"
-                        )
+                if not items:
+                    print("\nNo queue items returned.")
+                    continue
 
-                        queue_total += returned
+                print("\n" + "-" * 40)
+                print(f"PRINTING {len(items)} RETRIEVED ITEMS")
+                print("-" * 40)
 
-                        if not result["has_more"]:
-                            break
-
-                        skip = result["next_skip"]
-
-                    print(f"   ✓ Total fetched for queue: {queue_total}")
-
-                    total_items_across_all_queues += queue_total
-
-                except Exception as e:
-                    print(f"   ✗ Failed to fetch items: {e}")
-
-        print("\n" + "=" * 60)
-        print(f"TOTAL ITEMS ACROSS ALL QUEUES: {total_items_across_all_queues}")
-        print("=" * 60)
+                for idx, item in enumerate(items, 1):
+                    print(f"\nItem #{idx}")
+                    print(json.dumps(item, indent=4, default=str))
 
         return True
 
     except Exception as e:
-        print(f"✗ Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        print("\nERROR during test_get_queue_items:")
+        print(str(e))
         return False
 
     finally:
         await client.close()
 
+
+
+async def test_get_alerts():
+    print("\n" + "=" * 60)
+    print("TEST: get_alerts() — AuditLogs + RobotLogs")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+    print(f"\n  Account : {account}")
+    print(f"  Tenant  : {tenant}")
+
+    client = OrchestratorClient(account, tenant)
+
+    ICONS = {
+        "FATAL":       "💀",
+        "ERROR":       "🔴",
+        "WARN":        "🟡",
+        "WARNING":     "🟡",
+        "INFORMATION": "🔵",
+        "INFO":        "🔵",
+    }
+
+    def print_alerts(result: dict, label: str):
+        sources = result.get("sources", {})
+        alerts  = result.get("alerts", [])
+
+        print(f"\n  {'─' * 56}")
+        print(f"  {label}")
+        print(f"  {'─' * 56}")
+        print(f"  AuditLog total      : {sources.get('audit_log_count', 0):,}")
+        print(f"  RobotLog total      : {sources.get('robot_log_count', 0):,}")
+        print(f"  Folders with errors : {', '.join(sources.get('folders_with_logs', [])) or 'none'}")
+        print(f"  Displaying          : {result.get('returned', 0)}")
+        print(f"  {'─' * 56}")
+
+        if not alerts:
+            print("  No alerts found.")
+            return
+
+        for idx, a in enumerate(alerts, 1):
+            severity  = str(a.get("Severity", "")).upper()
+            icon      = ICONS.get(severity, "⚪")
+            source    = a.get("Source", "")
+            timestamp = a.get("CreationTime", "")
+
+            print(f"\n  {icon} [{idx:02d}] {severity:<12} {source:<10} {timestamp}")
+            print(f"  {'·' * 54}")
+            for key, val in a.items():
+                if val is None:
+                    continue
+                val_str = str(val)
+                # Wrap long messages
+                if len(val_str) > 100:
+                    print(f"    {key:<20}: {val_str[:100]}")
+                    for chunk in [val_str[i:i+100] for i in range(100, len(val_str), 100)]:
+                        print(f"    {'':<20}  {chunk}")
+                else:
+                    print(f"    {key:<20}: {val_str}")
+
+    try:
+        await client.authenticate()
+
+        # 1. No filter
+        result = await client.get_alerts(severity="Error",top=100)
+        print_alerts(result, "No filter — top 100 (sorted by most recent)")
+
+        # 2. Errors only
+        #result = await client.get_alerts(severity="Error", top=20)
+        #print_alerts(result, "severity=Error — top 20")
+
+        # 3. Fatal only
+        #result = await client.get_alerts(severity="Fatal", top=20)
+        #print_alerts(result, "severity=Fatal — top 20")
+
+        print(f"\n  {'─' * 56}")
+        return True
+
+    except Exception as e:
+        print(f"\n  ERROR: {e}")
+        raise
+
+    finally:
+        await client.close()
+
+async def test_get_audit_logs():
+    print("\n" + "=" * 60)
+    print("TEST: get_audit_logs()")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[0]
+
+    print(f"\n  Account : {account}")
+    print(f"  Tenant  : {tenant}")
+
+    client = OrchestratorClient(account, tenant)
+
+    try:
+        await client.authenticate()
+
+        alerts, count = await client.get_audit_logs(top=100, skip=0)
+
+        print(f"\n  Total Audit Logs : {count:,}")
+        print(f"  Returned         : {len(alerts)}")
+
+        for idx, a in enumerate(alerts, 1):
+            print(f"\n  [{idx:02d}] {a.get('CreationTime')}  {a.get('Message')}")
+            print(f"    User      : {a.get('UserName')}")
+            print(f"    Component : {a.get('Component')}")
+
+        print("\n  " + "─" * 56)
+        return True
+
+    except Exception as e:
+        print(f"\n  ERROR: {e}")
+        raise
+
+    finally:
+        await client.close()
+
+async def test_get_robot_logs():
+    print("\n" + "=" * 60)
+    print("TEST: get_robot_logs()")
+    print("=" * 60)
+
+    pairs = get_all_account_tenant_pairs()
+    if not pairs:
+        print("No account/tenant configured.")
+        return False
+
+    account, tenant = pairs[1]
+
+    print(f"\n  Account : {account}")
+    print(f"  Tenant  : {tenant}")
+
+    client = OrchestratorClient(account, tenant)
+
+    ICONS = {
+        "FATAL": "💀",
+        "ERROR": "🔴",
+        "WARN": "🟡",
+        "INFO": "🔵",
+        "TRACE": "⚪",
+    }
+
+    async def run_case(label: str, severities):
+        print(f"\n  {'─' * 56}")
+        print(f"  {label}")
+        print(f"  {'─' * 56}")
+
+        alerts, count, folders = await client.get_robot_logs(
+            severities=severities,
+            top=100,
+            skip=0,
+            folder_ids=None
+        )
+
+        print(f"\n  Total Robot Logs : {count:,}")
+        print(f"  Returned         : {len(alerts)}")
+        print(f"  Folders w/ logs  : {', '.join(folders) or 'none'}")
+
+        if not alerts:
+            print("\n  No logs found.")
+            return
+
+        for idx, a in enumerate(alerts, 1):
+
+            severity = str(a.get("Severity", "")).upper()
+            icon = ICONS.get(severity, "⚪")
+
+            print(f"\n  {icon} [{idx:02d}] {a.get('CreationTime')}  {severity}")
+            print(f"    Folder   : {a.get('FolderName')}")
+            print(f"    Process  : {a.get('Component')}")
+            print(f"    Message  : {a.get('Message')}")
+
+    try:
+        await client.authenticate()
+
+        # Multiple severities
+        await run_case(
+            "Multiple severities: Error + Fatal",
+            [LogSeverity.Error, LogSeverity.Fatal]
+        )
+
+        # Single severity
+        await run_case(
+            "Single severity: Warn",
+            [LogSeverity.Warn]
+        )
+
+        # Informational logs
+        await run_case(
+            "Informational logs: Info + Trace",
+            [LogSeverity.Info, LogSeverity.Trace]
+        )
+
+        # Default behavior
+        await run_case(
+            "Default filter (Fatal + Error + Warn)",
+            None
+        )
+
+        print(f"\n  {'─' * 56}")
+        return True
+
+    except Exception as e:
+        print(f"\n  ERROR: {e}")
+        raise
+
+    finally:
+        await client.close()
 async def test_ensure_folder_path():
     print("\n" + "=" * 60)
     print("TEST: Ensure + Resolve Folder Path")
@@ -1138,19 +1346,21 @@ if __name__ == "__main__":
     # Uncomment ONE test at a timeCLD
 
  
-     asyncio.run(test_get_folders_tree_multi_tenant())
-     asyncio.run(test_list_library_versions_flow())
-     asyncio.run(test_download_library_version())
-     asyncio.run(test_get_resources())
-     asyncio.run(test_ensure_folder_path())
-     asyncio.run(test_ensure_resources_local())
-     asyncio.run(test_link_resources_to_first_valid_folder())
-     asyncio.run(test_download_storage_file())
+     #asyncio.run(test_get_folders_tree_multi_tenant())
+     #asyncio.run(test_list_library_versions_flow())
+     #asyncio.run(test_download_library_version())
+     #asyncio.run(test_get_resources())
+     #asyncio.run(test_ensure_folder_path())
+     #asyncio.run(test_ensure_resources_local())
+     #asyncio.run(test_link_resources_to_first_valid_folder())
+     #asyncio.run(test_download_storage_file())
      #asyncio.run(test_get_queue_items())
-     asyncio.run(test_resolve_folder_from_queue())
-     asyncio.run(test_download_and_upload_cross_tenant())
-     asyncio.run(test_create_release_in_folder())
-     
+     #asyncio.run(test_resolve_folder_from_queue())
+     #asyncio.run(test_download_and_upload_cross_tenant())
+     #asyncio.run(test_create_release_in_folder())
+     #asyncio.run(test_get_alerts())
+     #asyncio.run(test_get_audit_logs())
+     asyncio.run(test_get_robot_logs())
 
 
   
